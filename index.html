@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClawLite</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg-0: #0a0e14;
+            --bg-1: #0f1319;
+            --bg-2: #151b24;
+            --bg-3: #1a222d;
+            --border: #1e2836;
+            --border-focus: #2a3a4e;
+            --accent: #22d3ee;
+            --accent-dim: #0e7490;
+            --accent-glow: rgba(34, 211, 238, 0.15);
+            --accent-2: #a78bfa;
+            --text-0: #e2e8f0;
+            --text-1: #94a3b8;
+            --text-2: #64748b;
+            --green: #34d399;
+            --red: #f87171;
+            --orange: #fb923c;
+            --nav-w: 56px;
+            --radius: 8px;
+        }
+
+        body {
+            font-family: 'DM Sans', -apple-system, sans-serif;
+            background: var(--bg-0);
+            color: var(--text-0);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* ── Sidebar ── */
+        .sidebar {
+            width: var(--nav-w);
+            background: var(--bg-1);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 0;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .sidebar-logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            font-size: 10px;
+            letter-spacing: 0.05em;
+            color: var(--accent);
+            margin-bottom: 16px;
+            writing-mode: vertical-lr;
+            transform: rotate(180deg);
+        }
+
+        .nav-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            background: transparent;
+            color: var(--text-2);
+            border-radius: var(--radius);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+            position: relative;
+        }
+
+        .nav-btn:hover { background: var(--bg-3); color: var(--text-1); }
+        .nav-btn.active { background: var(--accent-glow); color: var(--accent); }
+        .nav-btn.active::before {
+            content: '';
+            position: absolute;
+            left: -8px;
+            width: 3px;
+            height: 20px;
+            background: var(--accent);
+            border-radius: 0 2px 2px 0;
+        }
+
+        .nav-btn svg { width: 20px; height: 20px; }
+
+        .sidebar-spacer { flex: 1; }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-2);
+            margin-bottom: 12px;
+            transition: background 0.3s;
+        }
+        .status-dot.connected { background: var(--green); box-shadow: 0 0 8px rgba(52,211,153,0.4); }
+
+        /* ── Main area ── */
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+        .topbar {
+            height: 48px;
+            background: var(--bg-1);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .topbar-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--text-0);
+        }
+
+        .topbar-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--accent);
+            background: var(--accent-glow);
+            padding: 2px 8px;
+            border-radius: 4px;
+            letter-spacing: 0.03em;
+        }
+
+        .topbar-spacer { flex: 1; }
+
+        .topbar-stat {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-2);
+        }
+        .topbar-stat span { color: var(--text-1); }
+
+        /* ── Panels ── */
+        .panel { display: none; flex: 1; overflow: hidden; }
+        .panel.active { display: flex; flex-direction: column; }
+
+        /* ── Chat ── */
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .chat-messages::-webkit-scrollbar { width: 6px; }
+        .chat-messages::-webkit-scrollbar-track { background: transparent; }
+        .chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+        .msg {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.6;
+            animation: msgIn 0.2s ease;
+        }
+
+        @keyframes msgIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .msg.user {
+            align-self: flex-end;
+            background: var(--accent-dim);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg.assistant {
+            align-self: flex-start;
+            background: var(--bg-2);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg.system {
+            align-self: center;
+            background: transparent;
+            color: var(--text-2);
+            font-size: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            padding: 4px 12px;
+        }
+
+        .msg pre {
+            background: var(--bg-0);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px;
+            margin: 8px 0;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .msg code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            background: var(--bg-0);
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+
+        .typing {
+            align-self: flex-start;
+            padding: 12px 20px;
+            color: var(--text-2);
+            font-size: 13px;
+        }
+
+        .typing-dots span {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background: var(--accent);
+            border-radius: 50%;
+            margin: 0 2px;
+            animation: bounce 1.2s infinite;
+        }
+        .typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+        .typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+        @keyframes bounce {
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+            30% { transform: translateY(-6px); opacity: 1; }
+        }
+
+        .chat-input-area {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            background: var(--bg-1);
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .chat-input-area textarea {
+            flex: 1;
+            background: var(--bg-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-0);
+            font-family: 'DM Sans', sans-serif;
+            font-size: 14px;
+            padding: 10px 14px;
+            resize: none;
+            min-height: 42px;
+            max-height: 160px;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        .chat-input-area textarea:focus { border-color: var(--accent-dim); }
+        .chat-input-area textarea::placeholder { color: var(--text-2); }
+        .chat-input-area textarea:disabled { opacity: 0.4; }
+
+        .send-btn {
+            width: 42px;
+            height: 42px;
+            background: var(--accent);
+            border: none;
+            border-radius: var(--radius);
+            color: var(--bg-0);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s, transform 0.1s;
+            flex-shrink: 0;
+        }
+
+        .send-btn:hover { background: #06b6d4; }
+        .send-btn:active { transform: scale(0.95); }
+        .send-btn:disabled { opacity: 0.3; cursor: default; }
+        .send-btn svg { width: 18px; height: 18px; }
+
+        /* ── Memory Panel ── */
+        .panel-scroll { flex: 1; overflow-y: auto; padding: 20px; }
+
+        .section-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-2);
+            margin: 20px 0 10px;
+        }
+        .section-title:first-child { margin-top: 0; }
+
+        .mem-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .mem-row {
+            display: flex;
+            gap: 8px;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            align-items: center;
+        }
+
+        .mem-input {
+            flex: 1;
+            background: var(--bg-2);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-0);
+            font-size: 13px;
+            padding: 6px 10px;
+            outline: none;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .mem-input:focus { border-color: var(--accent-dim); }
+
+        .btn {
+            padding: 6px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-2);
+            color: var(--text-1);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: 'DM Sans', sans-serif;
+        }
+        .btn:hover { background: var(--bg-3); color: var(--text-0); }
+        .btn-accent { border-color: var(--accent-dim); color: var(--accent); }
+        .btn-accent:hover { background: var(--accent-glow); }
+        .btn-red { border-color: #7f1d1d; color: var(--red); }
+        .btn-red:hover { background: rgba(248,113,113,0.1); }
+        .btn-sm { padding: 4px 10px; font-size: 11px; }
+        .btn-remove {
+            width: 28px; height: 28px;
+            background: transparent; border: none; color: var(--text-2);
+            cursor: pointer; border-radius: 4px; font-size: 14px;
+        }
+        .btn-remove:hover { background: rgba(248,113,113,0.15); color: var(--red); }
+
+        .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+
+        .readonly-item {
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text-1);
+            line-height: 1.5;
+        }
+        .readonly-item .date { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent); }
+
+        .empty-state { color: var(--text-2); font-style: italic; font-size: 13px; padding: 8px 0; }
+
+        /* ── Cron Panel ── */
+        .cron-card {
+            background: var(--bg-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px;
+            margin-bottom: 12px;
+        }
+
+        .cron-card.disabled { opacity: 0.5; }
+
+        .cron-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .cron-name { font-weight: 600; font-size: 14px; }
+        .cron-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            letter-spacing: 0.03em;
+        }
+        .cron-badge.on { background: rgba(52,211,153,0.15); color: var(--green); }
+        .cron-badge.off { background: rgba(100,116,139,0.15); color: var(--text-2); }
+
+        .cron-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .cron-field-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-2); font-family: 'JetBrains Mono', monospace; }
+        .cron-field-value { font-size: 13px; color: var(--text-1); margin-top: 2px; }
+        .cron-field-full { grid-column: 1 / -1; }
+
+        .cron-actions { display: flex; gap: 8px; }
+
+        .add-form {
+            background: var(--bg-2);
+            border: 1px solid var(--accent-dim);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .add-form-title { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent); margin-bottom: 12px; font-weight: 600; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .form-group { display: flex; flex-direction: column; gap: 4px; }
+        .form-group.full { grid-column: 1 / -1; }
+        .form-label { font-size: 11px; color: var(--text-2); font-family: 'JetBrains Mono', monospace; }
+        .form-input {
+            background: var(--bg-0);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-0);
+            font-size: 13px;
+            padding: 8px 10px;
+            outline: none;
+            font-family: 'DM Sans', sans-serif;
+        }
+        .form-input:focus { border-color: var(--accent-dim); }
+        .form-hint { font-size: 10px; color: var(--text-2); font-family: 'JetBrains Mono', monospace; }
+
+        /* ── Settings Panel ── */
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            max-width: 600px;
+        }
+
+        .settings-card {
+            background: var(--bg-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px;
+        }
+        .settings-card.full { grid-column: 1 / -1; }
+
+        /* ── Toast ── */
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(80px);
+            background: var(--bg-3);
+            border: 1px solid var(--border);
+            color: var(--text-0);
+            padding: 10px 20px;
+            border-radius: var(--radius);
+            font-size: 13px;
+            transition: transform 0.3s;
+            z-index: 999;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        #toast.show { transform: translateX(-50%) translateY(0); }
+        #toast.error { border-color: #7f1d1d; color: var(--red); }
+
+        /* ── Responsive ── */
+        @media (max-width: 640px) {
+            .sidebar { width: 44px; }
+            .nav-btn { width: 32px; height: 32px; }
+            .msg { max-width: 95%; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-logo">CLAWLITE</div>
+        <button class="nav-btn active" data-panel="chat" title="Chat">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </button>
+        <button class="nav-btn" data-panel="memory" title="Memory">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        </button>
+        <button class="nav-btn" data-panel="cron" title="Scheduled Tasks">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </button>
+        <button class="nav-btn" data-panel="settings" title="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <div class="sidebar-spacer"></div>
+        <div class="status-dot" id="statusDot" title="Disconnected"></div>
+    </div>
+
+    <!-- Main -->
+    <div class="main">
+        <div class="topbar">
+            <div class="topbar-title">ClawLite</div>
+            <div class="topbar-tag" id="topbarStatus">offline</div>
+            <div class="topbar-spacer"></div>
+            <div class="topbar-stat">model: <span id="statModel">—</span></div>
+            <div class="topbar-stat">temp: <span id="statTemp">—</span></div>
+        </div>
+
+        <!-- Chat Panel -->
+        <div class="panel active" id="panel-chat">
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input-area">
+                <textarea id="messageInput" rows="1" placeholder="Send a message..." disabled></textarea>
+                <button class="send-btn" id="sendButton" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Memory Panel -->
+        <div class="panel" id="panel-memory">
+            <div class="panel-scroll">
+                <div class="section-title">Facts</div>
+                <div id="memFacts"></div>
+                <div class="btn-row">
+                    <button class="btn btn-sm btn-accent" onclick="addMemoryRow('facts')">+ Add</button>
+                </div>
+
+                <div class="section-title">Preferences</div>
+                <div id="memPrefs"></div>
+                <div class="btn-row">
+                    <button class="btn btn-sm btn-accent" onclick="addMemoryRow('preferences')">+ Add</button>
+                </div>
+
+                <div class="section-title">Notes</div>
+                <div id="memNotes"></div>
+
+                <div class="section-title">Events</div>
+                <div id="memEvents"></div>
+
+                <div class="btn-row" style="margin-top:20px;">
+                    <button class="btn btn-accent" onclick="saveMemory()">Save Changes</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cron Panel -->
+        <div class="panel" id="panel-cron">
+            <div class="panel-scroll" id="cronBody"></div>
+        </div>
+
+        <!-- Settings Panel -->
+        <div class="panel" id="panel-settings">
+            <div class="panel-scroll">
+                <div class="section-title">Model Configuration</div>
+                <div class="settings-grid">
+                    <div class="settings-card full">
+                        <div class="form-group">
+                            <div class="form-label">Model</div>
+                            <input class="form-input" id="settingModel" placeholder="gpt-4o">
+                        </div>
+                    </div>
+                    <div class="settings-card">
+                        <div class="form-group">
+                            <div class="form-label">Temperature</div>
+                            <input class="form-input" type="range" id="settingTemp" min="0" max="2" step="0.1" value="0.8">
+                            <div class="form-hint" id="tempDisplay">0.8</div>
+                        </div>
+                    </div>
+                    <div class="settings-card">
+                        <div class="form-group">
+                            <div class="form-label">Max Tokens</div>
+                            <input class="form-input" type="number" id="settingMaxTokens" value="4096">
+                        </div>
+                    </div>
+                </div>
+                <div class="btn-row" style="margin-top:16px;">
+                    <button class="btn btn-accent" onclick="saveSettings()">Save Settings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+<script>
+// ─── State ─────────────────────────────────────────────────────────────────────
+let ws, chatHistory = [], cronJobs = [], currentMemoryData = {};
+
+// ─── WebSocket ─────────────────────────────────────────────────────────────────
+function connect() {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${location.host}`);
+
+    ws.onopen = () => {
+        document.getElementById('statusDot').classList.add('connected');
+        document.getElementById('topbarStatus').textContent = 'connected';
+        document.getElementById('messageInput').disabled = false;
+        document.getElementById('sendButton').disabled = false;
+        addSystemMessage('Connected');
+        ws.send(JSON.stringify({ type: 'config', payload: {} }));
+    };
+
+    ws.onclose = () => {
+        document.getElementById('statusDot').classList.remove('connected');
+        document.getElementById('topbarStatus').textContent = 'offline';
+        document.getElementById('messageInput').disabled = true;
+        document.getElementById('sendButton').disabled = true;
+        addSystemMessage('Disconnected — reconnecting...');
+        setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => {};
+
+    ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        switch (msg.type) {
+            case 'chat':
+                hideTyping();
+                addMessage('assistant', msg.payload.content);
+                break;
+            case 'status':
+                document.getElementById('topbarStatus').textContent = msg.payload.status;
+                break;
+            case 'config':
+                document.getElementById('statModel').textContent = msg.payload.model;
+                document.getElementById('statTemp').textContent = msg.payload.temperature;
+                document.getElementById('settingModel').value = msg.payload.model || '';
+                document.getElementById('settingTemp').value = msg.payload.temperature || 0.8;
+                document.getElementById('tempDisplay').textContent = msg.payload.temperature || 0.8;
+                document.getElementById('settingMaxTokens').value = 4096;
+                break;
+            case 'save_config':
+                toast(msg.payload.success ? 'Settings saved' : 'Save failed: ' + msg.payload.error, !msg.payload.success);
+                break;
+            case 'get_memory':
+                renderMemory(msg.payload);
+                break;
+            case 'save_memory':
+                toast(msg.payload.success ? 'Memory saved' : 'Save failed', !msg.payload.success);
+                break;
+            case 'get_crons':
+                cronJobs = msg.payload.jobs || [];
+                renderCrons();
+                break;
+            case 'save_crons':
+                toast('Crons saved');
+                break;
+            case 'error':
+                toast(msg.payload.error, true);
+                break;
+        }
+    };
+}
+
+// ─── Chat ──────────────────────────────────────────────────────────────────────
+function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const text = input.value.trim();
+    if (!text || !ws || ws.readyState !== 1) return;
+
+    addMessage('user', text);
+    chatHistory.push({ role: 'user', content: text });
+    showTyping();
+
+    ws.send(JSON.stringify({ type: 'chat', payload: { messages: chatHistory } }));
+    input.value = '';
+    input.style.height = 'auto';
+}
+
+function addMessage(role, content) {
+    if (role === 'assistant') chatHistory.push({ role: 'assistant', content });
+    const container = document.getElementById('chatMessages');
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    div.innerHTML = formatMessage(content);
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+}
+
+function addSystemMessage(text) {
+    const container = document.getElementById('chatMessages');
+    const div = document.createElement('div');
+    div.className = 'msg system';
+    div.textContent = text;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+}
+
+function showTyping() {
+    hideTyping();
+    const container = document.getElementById('chatMessages');
+    const div = document.createElement('div');
+    div.className = 'typing';
+    div.id = 'typingIndicator';
+    div.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+}
+
+function hideTyping() {
+    const el = document.getElementById('typingIndicator');
+    if (el) el.remove();
+}
+
+function formatMessage(text) {
+    if (!text) return '';
+    let html = escHtml(text);
+    // Code blocks
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${code}</code></pre>`);
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Bold
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Links
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
+    // Line breaks
+    html = html.replace(/\n/g, '<br>');
+    return html;
+}
+
+// ─── Memory ────────────────────────────────────────────────────────────────────
+function loadMemory() {
+    ws.send(JSON.stringify({ type: 'get_memory', payload: {} }));
+}
+
+function renderMemory(data) {
+    currentMemoryData = data;
+    renderMemorySection('memFacts', data.facts || {});
+    renderMemorySection('memPrefs', data.preferences || {});
+    renderReadOnlyList('memNotes', (data.notes || []).map(n => {
+        const date = n.timestamp ? n.timestamp.split('T')[0] : '';
+        return { html: escHtml(n.content), date };
+    }));
+    renderReadOnlyList('memEvents', (data.events || []).map(e => {
+        return { html: escHtml(e.description), date: e.date };
+    }));
+}
+
+function renderMemorySection(id, obj) {
+    const el = document.getElementById(id);
+    el.innerHTML = '';
+    Object.entries(obj).forEach(([k, v]) => el.appendChild(makeMemRow(k, v)));
+    if (!Object.keys(obj).length) el.innerHTML = '<div class="empty-state">No entries yet.</div>';
+}
+
+function renderReadOnlyList(id, items) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = '';
+    if (!items.length) { el.innerHTML = '<div class="empty-state">No entries yet.</div>'; return; }
+    items.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'readonly-item';
+        div.innerHTML = (item.date ? `<span class="date">${item.date}</span> — ` : '') + item.html;
+        el.appendChild(div);
+    });
+}
+
+function makeMemRow(key, value) {
+    const row = document.createElement('div');
+    row.className = 'mem-row';
+    row.innerHTML = `
+        <input class="mem-input" placeholder="key" value="${escHtml(key)}">
+        <input class="mem-input" placeholder="value" value="${escHtml(String(value))}">
+        <button class="btn-remove" onclick="this.closest('.mem-row').remove()">&times;</button>
+    `;
+    return row;
+}
+
+function addMemoryRow(section) {
+    const id = section === 'facts' ? 'memFacts' : 'memPrefs';
+    const el = document.getElementById(id);
+    const empty = el.querySelector('.empty-state');
+    if (empty) empty.remove();
+    el.appendChild(makeMemRow('', ''));
+}
+
+function collectSection(id) {
+    const obj = {};
+    document.querySelectorAll(`#${id} .mem-row`).forEach(row => {
+        const inputs = row.querySelectorAll('.mem-input');
+        const k = inputs[0].value.trim(), v = inputs[1].value.trim();
+        if (k) obj[k] = v;
+    });
+    return obj;
+}
+
+function saveMemory() {
+    const memory = {
+        facts: collectSection('memFacts'),
+        preferences: collectSection('memPrefs'),
+        notes: currentMemoryData.notes || [],
+        events: currentMemoryData.events || [],
+        history: currentMemoryData.history || []
+    };
+    ws.send(JSON.stringify({ type: 'save_memory', payload: memory }));
+}
+
+// ─── Crons ─────────────────────────────────────────────────────────────────────
+function loadCrons() { ws.send(JSON.stringify({ type: 'get_crons', payload: {} })); }
+
+function renderCrons() {
+    const body = document.getElementById('cronBody');
+    body.innerHTML = '';
+    body.appendChild(buildAddForm());
+    if (!cronJobs.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.style.padding = '20px';
+        empty.textContent = 'No scheduled tasks yet. Add one above.';
+        body.appendChild(empty);
+        return;
+    }
+    cronJobs.forEach((job, i) => body.appendChild(buildCronCard(job, i)));
+}
+
+function buildCronCard(job, idx) {
+    const card = document.createElement('div');
+    card.className = `cron-card${job.enabled ? '' : ' disabled'}`;
+    card.innerHTML = `
+        <div class="cron-header">
+            <div class="cron-name">${escHtml(job.name)}</div>
+            <span class="cron-badge ${job.enabled ? 'on' : 'off'}">${job.enabled ? 'Active' : 'Paused'}</span>
+        </div>
+        <div class="cron-grid">
+            <div><div class="cron-field-label">Schedule</div><div class="cron-field-value">${escHtml(job.schedule)}</div></div>
+            <div><div class="cron-field-label">Last Run</div><div class="cron-field-value">${job.lastRun ? new Date(job.lastRun).toLocaleString() : 'Never'}</div></div>
+            <div class="cron-field-full"><div class="cron-field-label">Prompt</div><div class="cron-field-value">${escHtml(job.message)}</div></div>
+        </div>
+        <div class="cron-actions">
+            <button class="btn btn-sm btn-accent" onclick="toggleCron(${idx})">${job.enabled ? 'Pause' : 'Resume'}</button>
+            <button class="btn btn-sm btn-red" onclick="removeCron(${idx})">Remove</button>
+        </div>
+    `;
+    return card;
+}
+
+function buildAddForm() {
+    const form = document.createElement('div');
+    form.className = 'add-form';
+    form.innerHTML = `
+        <div class="add-form-title">+ New Scheduled Task</div>
+        <div class="form-grid">
+            <div class="form-group"><div class="form-label">Name</div><input class="form-input" id="newCronName" placeholder="Morning briefing"></div>
+            <div class="form-group"><div class="form-label">Schedule (cron)</div><input class="form-input" id="newCronSchedule" placeholder="0 8 * * *"><div class="form-hint">min hour day month weekday</div></div>
+            <div class="form-group full"><div class="form-label">Prompt</div><input class="form-input" id="newCronMessage" placeholder="What's my morning briefing?"></div>
+        </div>
+        <div class="btn-row" style="margin-top:12px;"><button class="btn btn-accent" onclick="addCron()">Add Task</button></div>
+    `;
+    return form;
+}
+
+function addCron() {
+    const name = document.getElementById('newCronName').value.trim();
+    const schedule = document.getElementById('newCronSchedule').value.trim();
+    const message = document.getElementById('newCronMessage').value.trim();
+    if (!name || !schedule || !message) { toast('Fill in all fields.', true); return; }
+    if (schedule.split(/\s+/).length < 5) { toast('Cron needs 5 fields (e.g. * * * * *)', true); return; }
+    cronJobs.push({ id: Date.now().toString(), name, schedule, message, enabled: true });
+    saveCrons();
+    renderCrons();
+}
+
+function toggleCron(i) { cronJobs[i].enabled = !cronJobs[i].enabled; saveCrons(); renderCrons(); }
+function removeCron(i) { cronJobs.splice(i, 1); saveCrons(); renderCrons(); }
+function saveCrons() { ws.send(JSON.stringify({ type: 'save_crons', payload: { jobs: cronJobs } })); }
+
+// ─── Settings ──────────────────────────────────────────────────────────────────
+function loadSettings() { ws.send(JSON.stringify({ type: 'config', payload: {} })); }
+
+function saveSettings() {
+    const model = document.getElementById('settingModel').value.trim();
+    const temperature = parseFloat(document.getElementById('settingTemp').value);
+    const maxTokens = parseInt(document.getElementById('settingMaxTokens').value);
+    if (!model) { toast('Model name required.', true); return; }
+    ws.send(JSON.stringify({ type: 'save_config', payload: { model, temperature: isNaN(temperature) ? undefined : temperature, maxTokens: isNaN(maxTokens) ? undefined : maxTokens } }));
+    document.getElementById('tempDisplay').textContent = temperature;
+    document.getElementById('statModel').textContent = model;
+    document.getElementById('statTemp').textContent = temperature;
+}
+
+document.getElementById('settingTemp').addEventListener('input', function() {
+    document.getElementById('tempDisplay').textContent = this.value;
+});
+
+// ─── Navigation ────────────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const panel = 'panel-' + btn.dataset.panel;
+        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(panel).classList.add('active');
+        if (btn.dataset.panel === 'settings') loadSettings();
+        if (btn.dataset.panel === 'memory') loadMemory();
+        if (btn.dataset.panel === 'cron') loadCrons();
+    });
+});
+
+// ─── Input bindings ────────────────────────────────────────────────────────────
+document.getElementById('sendButton').addEventListener('click', sendMessage);
+document.getElementById('messageInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+document.getElementById('messageInput').addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 160) + 'px';
+});
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+function toast(msg, isError = false) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'show' + (isError ? ' error' : '');
+    setTimeout(() => { el.className = ''; }, 3000);
+}
+
+function escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── Boot ──────────────────────────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>

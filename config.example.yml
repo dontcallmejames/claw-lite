@@ -1,0 +1,62 @@
+# ClawLite AI Assistant Configuration
+
+# LLM Settings
+llm:
+  provider: openai  # Options: 'anthropic', 'ollama', 'openai'
+  # OpenAI models (requires OPENAI_API_KEY in .env):
+  #   gpt-4o              — best overall, strong tool use
+  #   gpt-4o-mini         — faster and cheaper, good for most tasks
+  # Ollama models (pull with: ollama pull <model>):
+  #   qwen3.5:9b          — local, no cost, decent tool use
+  #   qwen2.5-coder:14b   — best local for code writing
+  model: gpt-4o
+  maxTokens: 4096
+  temperature: 0.8
+
+# Gateway Settings
+gateway:
+  port: 8080
+  host: 127.0.0.1
+  enabled: true
+
+# Channels
+channels:
+  discord:
+    enabled: false
+    requireMention: true  # Only respond when @mentioned in guild channels
+    allowedUsers: []  # Empty means allow all. Add user IDs to restrict
+    allowedBots: []  # Add bot user IDs that should be allowed to interact
+    allowedChannels: []  # Empty means allow all channels
+
+# Tools Configuration
+tools:
+  shell:
+    enabled: true
+    allowedCommands:
+      - ls
+      - pwd
+      - echo
+      - cat
+      - date
+  files:
+    enabled: true
+    basePath: ./workspace
+    maxFileSize: 10485760  # 10MB
+
+# Security
+security:
+  dmPolicy: open        # pairing | open | off — controls unknown sender access
+  requireApproval:
+    shell: true
+    fileWrite: true
+    fileDelete: true
+
+# Telegram Channel
+telegram:
+  token: "your-telegram-bot-token-here"
+  allowed_chat_ids: []   # Your personal Telegram chat ID (get from @userinfobot)
+
+# Heartbeat
+heartbeat:
+  enabled: true
+  schedule: "*/30 * * * *"   # Every 30 minutes

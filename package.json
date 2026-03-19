@@ -1,0 +1,47 @@
+{
+  "name": "claw-lite",
+  "version": "1.0.0",
+  "description": "Lightweight self-hosted AI assistant with multi-channel support, persistent memory, and extensible tools. Inspired by OpenClaw.",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "login": "tsx src/auth/login.ts",
+    "login:status": "tsx src/auth/login.ts --status",
+    "login:logout": "tsx src/auth/login.ts --logout",
+    "pairing": "tsx src/security/pairing-cli.ts",
+    "gateway": "tsx src/gateway/server.ts",
+    "discord": "tsx src/channels/discord.ts"
+  },
+  "keywords": [
+    "ai",
+    "assistant",
+    "chatbot",
+    "discord",
+    "claude"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "better-sqlite3": "^12.8.0",
+    "discord.js": "^14.17.3",
+    "dotenv": "^16.4.7",
+    "node-cron": "^4.2.1",
+    "node-telegram-bot-api": "^0.67.0",
+    "ws": "^8.19.0",
+    "yaml": "^2.8.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.5",
+    "@types/node-cron": "^3.0.11",
+    "@types/node-telegram-bot-api": "^0.64.14",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.2"
+  }
+}
