@@ -37,10 +37,9 @@ cp .env.example .env
 cp config.example.yml config.yml
 ```
 
-Edit `.env` with your API keys:
+Edit `.env` with your API keys (see "LLM Setup" below for which you need):
 
 ```env
-OPENAI_API_KEY=sk-your-key-here
 BRAVE_SEARCH_API_KEY=your-brave-key
 GITHUB_TOKEN=ghp_your-token
 DISCORD_BOT_TOKEN=your-discord-bot-token
@@ -53,6 +52,54 @@ llm:
   provider: openai    # openai | anthropic | ollama
   model: gpt-4o       # any model your provider supports
   fallback: []        # optional fallback models
+```
+
+### LLM Setup
+
+You have two options for connecting to an LLM:
+
+#### Option A: OpenAI OAuth (ChatGPT subscription — no API credits needed)
+
+If you have a ChatGPT Plus/Pro/Team subscription, you can use OAuth to connect without an API key. This uses your subscription quota instead of paid API credits.
+
+```bash
+npm run login
+```
+
+This opens a browser window to sign in with your ChatGPT account. Once authenticated, the token is saved to `~/.davos/auth.json` and refreshed automatically. Check status with:
+
+```bash
+npm run login:status
+```
+
+Then set your model in `config.yml`:
+
+```yaml
+llm:
+  provider: openai
+  model: gpt-4o          # or gpt-4o-mini, etc.
+```
+
+No `OPENAI_API_KEY` needed in `.env` when using OAuth.
+
+#### Option B: API Key (OpenAI, Anthropic, or Ollama)
+
+Add your API key to `.env`:
+
+```env
+# For OpenAI:
+OPENAI_API_KEY=sk-your-key-here
+
+# For Anthropic:
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+```
+
+For **Ollama** (free, local), just install [Ollama](https://ollama.ai), pull a model (`ollama pull qwen2.5:14b`), and set:
+
+```yaml
+llm:
+  provider: ollama
+  model: qwen2.5:14b
 ```
 
 ### Personalize
@@ -118,7 +165,7 @@ No setup needed. Available at `http://127.0.0.1:8080` when the server is running
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | For OpenAI | OpenAI API key |
+| `OPENAI_API_KEY` | For OpenAI (API key mode) | Not needed if using OAuth (`npm run login`) |
 | `ANTHROPIC_API_KEY` | For Anthropic | Anthropic API key |
 | `BRAVE_SEARCH_API_KEY` | For web search | [Brave Search](https://api.search.brave.com) key |
 | `GITHUB_TOKEN` | For GitHub tools | PAT with `repo` scope |
