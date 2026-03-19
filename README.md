@@ -183,6 +183,7 @@ No setup needed. Available at `http://127.0.0.1:8080` when the server is running
 | `memory_search` | Full-text search across conversation history |
 | `memory_query` | Answer questions from past conversations |
 | `github_*` | Read, write, list, search, commit to GitHub repos |
+| `send_message` / `schedule_message` | Send or schedule messages to Telegram/Discord (one-shot reminders or recurring) |
 | `morning_briefing` | Daily briefing (weather, news, GitHub) |
 | `switch_model` | Change LLM model at runtime |
 
