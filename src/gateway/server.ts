@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadConfig, reloadConfig } from '../config/loader.js';
 import { getLLMProvider } from '../llm/index.js';
-import { getToolRegistry, getClaudeTools } from '../tools/index.js';
+import { getToolRegistry, getClaudeTools, setChannelManager } from '../tools/index.js';
 import type { GatewayMessage, ChatRequest, ToolExecuteRequest, StatusResponse } from './types.js';
 import type { Message } from '../llm/types.js';
 import fs from 'fs';
@@ -191,6 +191,7 @@ export class GatewayServer {
     // Channel manager — fan-out notifications to all channels
     this.channelManager = new ChannelManager();
     this.channelManager.register(new WebSocketChannel(() => this.activeConnections));
+    setChannelManager(this.channelManager);
 
     const telegramToken = config.telegram?.token;
     if (telegramToken) {
@@ -215,7 +216,15 @@ export class GatewayServer {
     this.cronRunner = new CronRunner(
       cronPath,
       (message) => this.runCronJob(message),
-      (content, jobName) => this.channelManager.notify(content, jobName)
+      (content, jobName, channel) => {
+        if (channel) {
+          // Send to specific channel only
+          this.channelManager.sendTo(channel, '', `[⏳ ${jobName}]\n\n${content}`);
+        } else {
+          // Broadcast to all channels
+          this.channelManager.notify(content, jobName);
+        }
+      }
     );
     try {
       this.cronRunner.start();
@@ -286,6 +295,31 @@ export class GatewayServer {
       } else {
         res.writeHead(404);
         res.end('Not found');
+      }
+      return;
+    }
+
+    // Proxy /kaylee/* → ZeroClaw on Kaylee's Pi
+    if (req.url?.startsWith('/kaylee/')) {
+      this.proxyTo(req, res, req.url.slice('/kaylee'.length), 'http://192.168.1.10:3000', 'Kaylee unavailable');
+      return;
+    }
+
+    // Proxy /deckard/* → OpenClaw on the Pi (avoids CORS from browser)
+    if (req.url?.startsWith('/deckard/')) {
+      this.proxyTo(req, res, req.url.slice('/deckard'.length), 'http://192.168.1.191:18789', 'Deckard unavailable');
+      return;
+    }
+
+    // Serve AI Launchpad hub for GET /hub
+    if (req.method === 'GET' && req.url === '/hub') {
+      const hubPath = path.join(__dirname, '..', '..', '..', 'AI Launchpad', 'ai-launchpad.html');
+      if (fs.existsSync(hubPath)) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(fs.readFileSync(hubPath));
+      } else {
+        res.writeHead(404);
+        res.end('Hub not found');
       }
       return;
     }
@@ -415,9 +449,9 @@ export class GatewayServer {
       return { tool: 'morning_briefing', input: {} };
     }
 
-    // Add your own intent patterns here for direct tool routing.
-    // Example: match repo review requests and route to github_list_files
-    // const repoReviewMatch = text.match(/\b(?:review|look at|explore)\b.*\b(myrepo)\b/i);
+    // "review / look at / familiarise / dig into <repo>" → list files
+    // Add your own repo patterns here:
+    // const repoReviewMatch = text.match(/your-pattern/i);
     // if (repoReviewMatch) {
     //   return { tool: 'github_list_files', input: { owner: 'your-username', repo: 'your-repo', path: '' } };
     // }
@@ -501,6 +535,16 @@ export class GatewayServer {
     // Web tasks
     if (/search|look up|find|news|weather|fetch|url|website|http/.test(text)) {
       ['web_search','web_fetch'].forEach(t => coreTool.add(t));
+    }
+
+    // Messaging tasks
+    if (/send|message|telegram|discord|notify|text me|dm me|ping me/.test(text)) {
+      coreTool.add('send_message');
+    }
+
+    // Scheduling / reminders
+    if (/remind|schedule|later|timer|alarm|at \d|in \d+ (minute|hour|min)|every (day|morning|evening|hour|week)|cron/.test(text)) {
+      coreTool.add('schedule_message');
     }
 
     // System tasks

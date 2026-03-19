@@ -23,6 +23,19 @@ export class ChannelManager {
     );
   }
 
+  /** Get a channel by name (e.g. 'telegram', 'discord') */
+  getChannel(name: string): Channel | undefined {
+    return this.channels.find(ch => ch.name === name);
+  }
+
+  /** Send a message to a specific channel */
+  async sendTo(channelName: string, target: string, content: string): Promise<boolean> {
+    const ch = this.getChannel(channelName);
+    if (!ch) return false;
+    await ch.send(target, content);
+    return true;
+  }
+
   start(): void {
     for (const ch of this.channels) {
       try {

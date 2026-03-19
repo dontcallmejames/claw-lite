@@ -1,13 +1,15 @@
 import * as nodeCron from 'node-cron';
 import fs from 'fs';
 
-interface CronJob {
+export interface CronJob {
   id: string;
   name: string;
   schedule: string;
   message: string;
   enabled: boolean;
   lastRun?: string;
+  channel?: string;   // target channel: 'telegram', 'discord', or omit for all
+  oneShot?: boolean;   // if true, disable after first fire
 }
 
 interface CronFile {
@@ -21,12 +23,12 @@ export class CronRunner {
   private watcher: fs.FSWatcher | null = null;
   private selfWriting = false;
   private onMessage: (message: string) => Promise<string>;
-  private broadcast: (content: string, jobName: string) => void;
+  private broadcast: (content: string, jobName: string, channel?: string) => void;
 
   constructor(
     cronPath: string,
     onMessage: (message: string) => Promise<string>,
-    broadcast: (content: string, jobName: string) => void
+    broadcast: (content: string, jobName: string, channel?: string) => void
   ) {
     this.cronPath = cronPath;
     this.onMessage = onMessage;
@@ -108,14 +110,39 @@ export class CronRunner {
 
     try {
       const result = await this.onMessage(job.message);
-      this.broadcast(result, job.name);
+      this.broadcast(result, job.name, job.channel);
       this.updateLastRun(job.id);
+
+      // One-shot jobs disable after first fire
+      if (job.oneShot) {
+        this.disableJob(job.id);
+        console.log(`[Cron] One-shot job "${job.name}" completed and disabled`);
+      }
     } catch (err) {
       console.error(`[Cron] Job "${job.name}" failed:`, err);
       const message = err instanceof Error ? err.message : String(err);
       this.broadcast(`Job failed: ${message}`, job.name);
     } finally {
       this.running.delete(job.id);
+    }
+  }
+
+  private disableJob(jobId: string): void {
+    try {
+      const cronFile: CronFile = JSON.parse(fs.readFileSync(this.cronPath, 'utf-8'));
+      const job = cronFile.jobs.find(j => j.id === jobId);
+      if (job) {
+        job.enabled = false;
+        this.selfWriting = true;
+        fs.writeFileSync(this.cronPath, JSON.stringify(cronFile, null, 2), 'utf-8');
+        this.selfWriting = false;
+      }
+      // Stop the task
+      const task = this.tasks.get(jobId);
+      if (task) { task.stop(); this.tasks.delete(jobId); }
+    } catch (err) {
+      this.selfWriting = false;
+      console.error('[Cron] Failed to disable job:', err);
     }
   }
 

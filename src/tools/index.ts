@@ -15,9 +15,12 @@ import { githubReadFileTool, githubListFilesTool, githubWriteFileTool, githubDel
 import { writeAndCommitTool } from './write-and-commit.js';
 import { writeSkillTool } from './write-skill.js';
 import { getConfigTool } from './get-config.js';
+import { sendMessageTool } from './send-message.js';
+import { scheduleMessageTool } from './schedule-message.js';
 
 export * from './types.js';
 export * from './registry.js';
+export { setChannelManager } from './send-message.js';
 
 export function initializeTools(): void {
   const registry = getToolRegistry();
@@ -49,6 +52,8 @@ export function initializeTools(): void {
   registry.registerTool(githubCreateRepoTool);
   registry.registerTool(githubSearchCodeTool);
   registry.registerTool(githubRepoInfoTool);
+  registry.registerTool(sendMessageTool);
+  registry.registerTool(scheduleMessageTool);
 
   console.log(`Initialized ${registry.getAllTools().length} tools`);
 }
