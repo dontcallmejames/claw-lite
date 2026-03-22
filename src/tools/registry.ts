@@ -40,8 +40,20 @@ class ToolRegistryImpl implements ToolRegistry {
       };
     }
 
+    // Gate on requiresConfirmation: if the tool declares it and the caller
+    // hasn't passed confirmed: true, return a confirmation-request result so
+    // the LLM knows to ask the user before proceeding.
+    if (tool.requiresConfirmation && input.confirmed !== true) {
+      return {
+        success: false,
+        error: `Tool "${name}" requires explicit user confirmation before it can run. Ask the user to confirm, then call this tool again with confirmed: true.`
+      };
+    }
+
     try {
-      console.log(`Executing tool: ${name}`, input);
+      // Log the tool name and which input keys are present — not values, which
+      // may contain file content, private notes, or other sensitive data.
+      console.log(`Executing tool: ${name}`, { keys: Object.keys(input) });
       const result = await tool.execute(input, context);
       console.log(`Tool ${name} completed:`, result.success ? 'success' : 'failed');
       return result;
