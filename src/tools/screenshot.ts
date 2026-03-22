@@ -11,7 +11,7 @@ const __dirname = path.dirname(__filename);
 
 export const screenshotTool: ToolDefinition = {
   name: 'take_screenshot',
-  description: 'Take a screenshot of the entire screen or a specific window. Returns the file path.',
+  description: 'Take a screenshot of the entire primary screen and return the saved file path.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -19,20 +19,28 @@ export const screenshotTool: ToolDefinition = {
         type: 'string',
         description: 'Optional filename for the screenshot (default: screenshot_<timestamp>.png)',
       },
-      window_title: {
-        type: 'string',
-        description: 'Optional window title to capture specific window (Windows only)',
-      },
     },
     required: [],
   },
 
   async execute(input: Record<string, any>, context: ToolExecutionContext): Promise<ToolExecutionResult> {
-    const { filename, window_title } = input;
+    const { filename } = input;
 
     try {
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const screenshotName = filename || `screenshot_${timestamp}.png`;
+
+      // Sanitize filename: allow only alphanumeric, hyphens, underscores, dots, spaces.
+      // This prevents PowerShell injection via single-quote escape in the Save() call.
+      let safeName: string;
+      if (filename) {
+        const cleaned = String(filename).replace(/[^a-zA-Z0-9\-_. ]/g, '');
+        safeName = cleaned.trim() || `screenshot_${timestamp}.png`;
+        // Ensure it ends with .png
+        if (!safeName.toLowerCase().endsWith('.png')) safeName += '.png';
+      } else {
+        safeName = `screenshot_${timestamp}.png`;
+      }
+      const screenshotName = safeName;
       const screenshotsDir = path.join(__dirname, '..', '..', 'screenshots');
 
       // Create screenshots directory if it doesn't exist
