@@ -1,17 +1,19 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import type { ToolDefinition, ToolExecutionContext, ToolExecutionResult } from './types.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Restart the assistant
  */
 export const restartTool: ToolDefinition = {
   name: 'restart_assistant',
-  description: 'Restart the assistant process. Useful after making configuration changes or installing new dependencies.',
+  requiresConfirmation: true,
+  description: 'Restart the assistant process (stops and restarts the running Node.js service).\n\nUse this when: asked to restart the assistant, or after config changes that require a restart to take effect.\nDo NOT use this when: you want to recompile TypeScript — use `build_assistant` to rebuild first, then restart.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -52,7 +54,8 @@ export const restartTool: ToolDefinition = {
  */
 export const updateConfigTool: ToolDefinition = {
   name: 'update_config',
-  description: 'Update the assistant configuration file (config.yml). Can change settings like model, temperature, tools, etc.',
+  requiresConfirmation: true,
+  description: 'Update a specific field in the assistant configuration (config.yml) by key path.\n\nUse this when: asked to change a setting — name, persona, timezone, allowed shell commands, etc.\nDo NOT use this when: you only want to read the config — use `get_config` instead. Do NOT use this when: changing the AI model — use `switch_model` for that.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -82,32 +85,61 @@ export const updateConfigTool: ToolDefinition = {
       // Parse the section path (e.g., "llm.model" -> ["llm", "model"])
       const parts = section.split('.');
 
-      if (parts.length !== 2) {
+      if (parts.length < 2 || parts.length > 3) {
         return {
           success: false,
-          error: 'Section must be in format "section.key" (e.g., "llm.model")'
+          error: 'Section must be "section.key" or "section.subsection.key" (e.g., "llm.model" or "tools.files.enabled")'
         };
       }
 
-      // Simple YAML update - find and replace the line
-      // This is a basic implementation; for complex configs, use a proper YAML parser
-      const [sectionName, key] = parts;
-
-      // Match the pattern: "  key: value" under the section
-      const regex = new RegExp(
-        `(${sectionName}:[\\s\\S]*?\\n\\s+${key}:\\s+)([^\\n]+)`,
-        'i'
-      );
-
-      const match = configContent.match(regex);
-      if (!match) {
+      // Validate all parts are safe identifiers to prevent regex injection.
+      if (!parts.every((p: string) => /^[a-zA-Z0-9_]+$/.test(p))) {
         return {
           success: false,
-          error: `Could not find "${section}" in config file`
+          error: 'Section path parts must contain only alphanumeric characters and underscores'
         };
       }
 
-      configContent = configContent.replace(regex, `$1${value}`);
+      // Strip newlines to prevent YAML structure injection.
+      // Use a replacer function to avoid $1/$2 capture-group interpretation.
+      const safeValue = value.replace(/[\r\n]/g, ' ');
+      const replacer = (_: string, prefix: string) => `${prefix}${safeValue}`;
+
+      let found = false;
+
+      if (parts.length === 2) {
+        const [sectionName, key] = parts;
+        // Anchor to the section header at the start of a line (column 0) to
+        // prevent matching the wrong section when two sections share a key name.
+        // The lazy [\s\S]*? stops at the first occurrence of the key under this
+        // section header. Because section headers are at column 0 and keys are
+        // indented, the regex won't cross into the next top-level section.
+        const regex = new RegExp(
+          `(^${sectionName}:[\\s\\S]*?\\n[ \\t]+${key}:[ \\t]+)[^\\n]+`,
+          'm'
+        );
+        if (!regex.test(configContent)) {
+          return { success: false, error: `Could not find "${section}" in config file` };
+        }
+        configContent = configContent.replace(regex, replacer);
+        found = true;
+      } else {
+        // 3-part path: section.subsection.key
+        const [sectionName, subSection, key] = parts;
+        const regex = new RegExp(
+          `(^${sectionName}:[\\s\\S]*?\\n[ \\t]+${subSection}:[\\s\\S]*?\\n[ \\t]+${key}:[ \\t]+)[^\\n]+`,
+          'm'
+        );
+        if (!regex.test(configContent)) {
+          return { success: false, error: `Could not find "${section}" in config file` };
+        }
+        configContent = configContent.replace(regex, replacer);
+        found = true;
+      }
+
+      if (!found) {
+        return { success: false, error: `Could not find "${section}" in config file` };
+      }
       writeFileSync(configPath, configContent, 'utf-8');
 
       const message = `Updated ${section} to "${value}"`;
@@ -142,7 +174,8 @@ export const updateConfigTool: ToolDefinition = {
  */
 export const installDependencyTool: ToolDefinition = {
   name: 'install_dependency',
-  description: 'Install a new npm package dependency for the assistant. Useful for adding new functionality.',
+  requiresConfirmation: true,
+  description: 'Install a Node.js package dependency into the assistant\'s project using npm.\n\nUse this when: a new feature requires a package that isn\'t installed yet.\nDo NOT use this when: the package is already installed — check first.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -161,14 +194,25 @@ export const installDependencyTool: ToolDefinition = {
   async execute(input: Record<string, any>, context: ToolExecutionContext): Promise<ToolExecutionResult> {
     const { package: packageName, dev = false } = input;
 
+    // Validate npm package name to prevent shell injection.
+    // Allows scoped packages (@scope/name) and version specifiers (@version).
+    const NPM_PACKAGE_RE = /^(@[a-z0-9\-~][a-z0-9\-._~]*\/)?[a-z0-9\-~][a-z0-9\-._~]*(@[\w\-._]+)?$/i;
+    if (!NPM_PACKAGE_RE.test(String(packageName))) {
+      return {
+        success: false,
+        error: `Invalid package name: "${packageName}". Must be a valid npm package name.`
+      };
+    }
+
     try {
-      const command = dev
-        ? `npm install --save-dev ${packageName}`
-        : `npm install ${packageName}`;
+      // Use execFile with argument array to avoid shell injection entirely.
+      const args = dev
+        ? ['install', '--save-dev', packageName]
+        : ['install', packageName];
 
       console.log(`[Self-Management] Installing ${packageName}...`);
 
-      const { stdout, stderr } = await execAsync(command, {
+      const { stdout, stderr } = await execFileAsync('npm', args, {
         cwd: process.cwd(),
         timeout: 60000 // 60 second timeout
       });
@@ -198,7 +242,7 @@ export const installDependencyTool: ToolDefinition = {
  */
 export const buildTool: ToolDefinition = {
   name: 'build_assistant',
-  description: 'Build the assistant by compiling TypeScript files. Required after modifying source code.',
+  description: 'Recompile the assistant\'s TypeScript source code (runs `npm run build`).\n\nUse this when: TypeScript source files have been modified and need to be recompiled before restarting.\nDo NOT use this when: you just want to restart the running process — use `restart_assistant` for that.',
   inputSchema: {
     type: 'object',
     properties: {
