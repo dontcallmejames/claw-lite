@@ -1,8 +1,9 @@
 import type { ToolDefinition, ToolExecutionContext, ToolExecutionResult } from './types.js';
+import { wrapExternalContent, sanitizeInjectionPatterns } from '../security/external-content.js';
 
 export const morningBriefingTool: ToolDefinition = {
   name: 'morning_briefing',
-  description: 'Fetch a morning briefing for Jim: current weather and top news headlines. Call this when Jim asks for a daily briefing, morning update, or wants to know what\'s going on today.',
+  description: 'Generate and send a personalized morning briefing with weather, schedule, tasks, news, and stock updates.\n\nUse this when: the user asks for a morning briefing, or the scheduled morning briefing cron fires.\nDo NOT use this when: the user just wants one specific piece of information (weather only, news only, etc.) — answer that directly instead.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -26,78 +27,88 @@ export const morningBriefingTool: ToolDefinition = {
     const sections: string[] = [];
     const errors: string[] = [];
 
-    // --- Weather via wttr.in ---
-    try {
-      const weatherUrl = `https://wttr.in/${encodeURIComponent(location)}?format=3`;
-      const weatherRes = await fetch(weatherUrl, {
-        headers: { 'User-Agent': 'curl/7.0' },
-        signal: AbortSignal.timeout(8000)
-      });
-      if (weatherRes.ok) {
-        const weather = (await weatherRes.text()).trim();
-        sections.push(`🌤 WEATHER\n${weather}`);
-      } else {
-        errors.push('weather unavailable');
-      }
-    } catch {
-      errors.push('weather fetch failed');
-    }
+    // Run all three fetches concurrently — each has its own 8s timeout, so
+    // sequential worst-case would be 24s; concurrent worst-case is 8s.
+    const [weatherResult, newsResult, techResult] = await Promise.allSettled([
 
-    // --- Headlines via NewsAPI (free RSS alternative) ---
-    try {
-      // Use a free RSS/JSON news source - no API key needed
-      const newsUrl = 'https://feeds.bbci.co.uk/news/world/rss.xml';
-      const newsRes = await fetch(newsUrl, {
-        signal: AbortSignal.timeout(8000)
-      });
+      // --- Weather via wttr.in ---
+      (async () => {
+        const weatherUrl = `https://wttr.in/${encodeURIComponent(location)}?format=3`;
+        const weatherRes = await fetch(weatherUrl, {
+          headers: { 'User-Agent': 'curl/7.0' },
+          signal: AbortSignal.timeout(8000)
+        });
+        if (weatherRes.ok) {
+          return (await weatherRes.text()).trim();
+        }
+        throw new Error('weather unavailable');
+      })(),
 
-      if (newsRes.ok) {
+      // --- World headlines via BBC RSS ---
+      (async () => {
+        const newsUrl = 'https://feeds.bbci.co.uk/news/world/rss.xml';
+        const newsRes = await fetch(newsUrl, {
+          signal: AbortSignal.timeout(8000)
+        });
+        if (!newsRes.ok) throw new Error('news feed returned non-OK status');
         const xml = await newsRes.text();
-        // Parse titles from RSS XML
         const titleMatches = xml.matchAll(/<title><!\[CDATA\[(.*?)\]\]><\/title>|<title>(.*?)<\/title>/g);
         const headlines: string[] = [];
         let count = 0;
         for (const match of titleMatches) {
-          const title = (match[1] || match[2] || '').trim();
-          // Skip the feed title itself
+          const title = sanitizeInjectionPatterns((match[1] || match[2] || '').trim());
           if (title && title !== 'BBC News' && !title.startsWith('BBC') && count < 7) {
             headlines.push(`• ${title}`);
             count++;
           }
         }
-        if (headlines.length > 0) {
-          sections.push(`📰 WORLD HEADLINES (BBC)\n${headlines.join('\n')}`);
-        }
-      }
-    } catch {
-      errors.push('news fetch failed');
-    }
+        return headlines;
+      })(),
 
-    // --- Tech headlines ---
-    try {
-      const techUrl = 'https://feeds.feedburner.com/TechCrunch';
-      const techRes = await fetch(techUrl, {
-        signal: AbortSignal.timeout(8000)
-      });
-
-      if (techRes.ok) {
+      // --- Tech headlines via TechCrunch RSS ---
+      (async () => {
+        const techUrl = 'https://feeds.feedburner.com/TechCrunch';
+        const techRes = await fetch(techUrl, {
+          signal: AbortSignal.timeout(8000)
+        });
+        if (!techRes.ok) throw new Error('tech feed returned non-OK status');
         const xml = await techRes.text();
         const titleMatches = xml.matchAll(/<title>(.*?)<\/title>/g);
         const headlines: string[] = [];
         let count = 0;
         for (const match of titleMatches) {
-          const title = match[1].replace(/<!\[CDATA\[(.*?)\]\]>/, '$1').trim();
+          const title = sanitizeInjectionPatterns(match[1].replace(/<!\[CDATA\[(.*?)\]\]>/, '$1').trim());
           if (title && title !== 'TechCrunch' && count < 5) {
             headlines.push(`• ${title}`);
             count++;
           }
         }
-        if (headlines.length > 0) {
-          sections.push(`💻 TECH (TechCrunch)\n${headlines.join('\n')}`);
-        }
+        return headlines;
+      })(),
+    ]);
+
+    // Collect results
+    if (weatherResult.status === 'fulfilled') {
+      sections.push(`WEATHER\n${weatherResult.value}`);
+    } else {
+      errors.push('weather fetch failed');
+    }
+
+    if (newsResult.status === 'fulfilled') {
+      if (newsResult.value.length > 0) {
+        sections.push(`WORLD HEADLINES (BBC)\n${newsResult.value.join('\n')}`);
       }
-    } catch {
-      // Tech headlines optional, skip silently
+    } else {
+      errors.push('news fetch failed');
+    }
+
+    if (techResult.status === 'fulfilled') {
+      if (techResult.value.length > 0) {
+        sections.push(`TECH (TechCrunch)\n${techResult.value.join('\n')}`);
+      }
+    } else {
+      // Tech is optional but report the failure so the user knows why it's missing
+      errors.push('tech news fetch failed');
     }
 
     // --- Date/time ---
@@ -111,7 +122,7 @@ export const morningBriefingTool: ToolDefinition = {
       timeZone: 'America/New_York'
     });
 
-    const header = `☀️ MORNING BRIEFING — ${dateStr} ${timeStr} EST`;
+    const header = `MORNING BRIEFING — ${dateStr} ${timeStr} EST`;
     const divider = '─'.repeat(50);
 
     if (sections.length === 0) {
@@ -125,7 +136,7 @@ export const morningBriefingTool: ToolDefinition = {
 
     return {
       success: true,
-      output
+      output: wrapExternalContent(output, 'morning-briefing/rss')
     };
   }
 };
