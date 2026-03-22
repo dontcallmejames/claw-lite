@@ -193,7 +193,8 @@ export class GatewayServer {
     this.channelManager.register(new WebSocketChannel(() => this.activeConnections));
     setChannelManager(this.channelManager);
 
-    const telegramToken = config.telegram?.token;
+    // Telegram token is read from TELEGRAM_TOKEN env var — not hardcoded in config
+    const telegramToken = process.env.TELEGRAM_TOKEN || config.telegram?.token;
     if (telegramToken) {
       const allowedChatIds = config.telegram?.allowed_chat_ids ?? [];
       const telegramChannel = new TelegramChannel(telegramToken, allowedChatIds);
@@ -299,31 +300,6 @@ export class GatewayServer {
       return;
     }
 
-    // Proxy /kaylee/* → ZeroClaw on Kaylee's Pi
-    if (req.url?.startsWith('/kaylee/')) {
-      this.proxyTo(req, res, req.url.slice('/kaylee'.length), 'http://192.168.1.10:3000', 'Kaylee unavailable');
-      return;
-    }
-
-    // Proxy /deckard/* → OpenClaw on the Pi (avoids CORS from browser)
-    if (req.url?.startsWith('/deckard/')) {
-      this.proxyTo(req, res, req.url.slice('/deckard'.length), 'http://192.168.1.191:18789', 'Deckard unavailable');
-      return;
-    }
-
-    // Serve AI Launchpad hub for GET /hub
-    if (req.method === 'GET' && req.url === '/hub') {
-      const hubPath = path.join(__dirname, '..', '..', '..', 'AI Launchpad', 'ai-launchpad.html');
-      if (fs.existsSync(hubPath)) {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(fs.readFileSync(hubPath));
-      } else {
-        res.writeHead(404);
-        res.end('Hub not found');
-      }
-      return;
-    }
-
     // POST /webhook
     if (req.method === 'POST' && req.url === '/webhook') {
       let body = '';
@@ -386,7 +362,7 @@ export class GatewayServer {
 
       this.sendMessage(ws, {
         type: 'status',
-        payload: { message: 'Connected to ClawLite', version: '1.0.0' }
+        payload: { message: 'Connected to assistant', version: '1.0.0' }
       });
     });
 
@@ -449,26 +425,17 @@ export class GatewayServer {
       return { tool: 'morning_briefing', input: {} };
     }
 
-    // "review / look at / familiarise / dig into <repo>" → list files
-    // Add your own repo patterns here:
-    // const repoReviewMatch = text.match(/your-pattern/i);
-    // if (repoReviewMatch) {
-    //   return { tool: 'github_list_files', input: { owner: 'your-username', repo: 'your-repo', path: '' } };
-    // }
-
     return null;
   }
 
   /**
    * Returns true for messages that are pure conversation - no tools needed.
-   * Keeps the tool list out of simple exchanges so small models don't get confused.
    */
   private isConversational(messages: any[]): boolean {
     const lastUser = [...messages].reverse().find((m: any) => m.role === 'user');
     if (!lastUser) return false;
     const text = lastUser.content.trim().toLowerCase();
 
-    // These always need tools - never treat as conversational
     const alwaysNeedTools = [
       /briefing/, /weather/, /headline/, /\bnews\b/,
       /\bsearch\b/, /read.*file/, /show.*file/,
@@ -479,7 +446,6 @@ export class GatewayServer {
     ];
     if (alwaysNeedTools.some(p => p.test(text))) return false;
 
-    // Pure conversational patterns - exact/near-exact matches only
     const conversational = [
       /^(hi|hello|hey|yo|sup|howdy)[\s!?.]?$/,
       /^(thanks|thank you|thx|ty)[\s!?.]?$/,
@@ -495,7 +461,6 @@ export class GatewayServer {
       /which models?.*available/,
       /what (llm|ai) models?/,
       /what are your (tools|capabilities|skills)/,
-      // Model/version questions — answer is already in the system prompt
       /what model (are you|do you)/,
       /which model (are you|do you)/,
       /what.*model.*using/,
@@ -510,87 +475,18 @@ export class GatewayServer {
   }
 
   /**
-   * Return a focused subset of tools based on what the message is about.
-   * Giving a 14B model 22 tools causes it to pick wrong ones or spiral.
-   * Core tools always included; domain tools added by keyword.
+   * Return all tools minus any on the deny list.
    */
-  private getRelevantTools(messages: any[]) {
-    const allTools = getClaudeTools();
-    // Scan last 6 messages so mid-conversation context isn't lost
-    const text = messages.slice(-6)
-      .map((m: any) => m.content || '')
-      .join(' ')
-      .toLowerCase();
-
-    // Always include these
-    const coreTool = new Set(['remember', 'recall', 'get_config', 'memory_search', 'memory_query']);
-
-    // GitHub tasks
-    if (/github|repo|commit|file|plugin|code|write|create|build|update|read|list|delete/.test(text)) {
-      ['write_and_commit','github_read_file','github_list_files','github_write_file',
-       'github_delete_file','github_create_repo','github_search_code','github_repo_info',
-       'read_file','write_file','edit_file','list_files','write_skill'].forEach(t => coreTool.add(t));
-    }
-
-    // Web tasks
-    if (/search|look up|find|news|weather|fetch|url|website|http/.test(text)) {
-      ['web_search','web_fetch'].forEach(t => coreTool.add(t));
-    }
-
-    // Messaging tasks
-    if (/send|message|telegram|discord|notify|text me|dm me|ping me/.test(text)) {
-      coreTool.add('send_message');
-    }
-
-    // Scheduling / reminders
-    if (/remind|schedule|later|timer|alarm|at \d|in \d+ (minute|hour|min)|every (day|morning|evening|hour|week)|cron/.test(text)) {
-      coreTool.add('schedule_message');
-    }
-
-    // System tasks
-    if (/system|cpu|disk|ram|process|memory|monitor|shell|run|execute/.test(text)) {
-      ['system_monitor','execute_shell','process_list','process_info'].forEach(t => coreTool.add(t));
-    }
-
-    // Config / model tasks
-    if (/config|model|temperature|switch|setting/.test(text)) {
-      ['get_config','update_config','switch_model'].forEach(t => coreTool.add(t));
-    }
-
-    // Briefing
-    if (/briefing|morning|today|news|headline/.test(text)) {
-      coreTool.add('morning_briefing');
-    }
-
-    // Skill tasks
-    if (/skill|workflow|remember how|teach/.test(text)) {
-      coreTool.add('write_skill');
-    }
-
-    // Apply tool profile — expand base set if profile is 'full' or 'coding'
+  private getAllowedTools() {
     const config = reloadConfig();
-    const profile = config.tools?.profile ?? 'full';
-    if (profile === 'full') {
-      allTools.forEach(t => coreTool.add(t.name));
-    } else if (profile === 'coding') {
-      ['write_and_commit','github_read_file','github_list_files','github_write_file',
-       'github_delete_file','github_create_repo','github_search_code','github_repo_info',
-       'read_file','write_file','edit_file','list_files','write_skill',
-       'web_search','web_fetch'].forEach(t => coreTool.add(t));
-    }
-    // 'minimal' profile just keeps the coreTool base (remember, recall, get_config)
-
-    // Remove denied tools
     const denyList = new Set(config.tools?.deny ?? []);
-    const filtered = allTools.filter(t => coreTool.has(t.name) && !denyList.has(t.name));
-    console.log(`[Gateway] Tool subset (${filtered.length}): ${filtered.map(t => t.name).join(', ')}`);
-    return filtered;
+    const tools = getClaudeTools().filter(t => !denyList.has(t.name));
+    console.log(`[Gateway] Tools (${tools.length}): ${tools.map(t => t.name).join(', ')}`);
+    return tools;
   }
 
   /**
    * Check whether a model response is fabricating a completed action.
-   * If the model claims to have written/committed/uploaded/created something
-   * but no mutating tool was called this session, it's lying.
    */
   private verifyResponse(
     content: string,
@@ -600,7 +496,6 @@ export class GatewayServer {
 
     const lower = content.toLowerCase();
 
-    // Phrases that indicate the model is claiming it completed a write/commit/upload
     const claimPatterns = [
       /i(?:'ve| have) (?:added|created|written|updated|committed|pushed|uploaded|saved|made the changes)/,
       /(?:the file|the changes|the update|the commit|the readme|the plugin) (?:has been|have been|is now|are now) (?:added|created|written|updated|committed|pushed|uploaded|saved)/,
@@ -612,7 +507,6 @@ export class GatewayServer {
     const isClaiming = claimPatterns.some(p => p.test(lower));
     if (!isClaiming) return { ok: true };
 
-    // Mutating tools — if any of these fired, the claim is legitimate
     const mutatingTools = [
       'write_and_commit', 'github_write_file', 'github_delete_file',
       'github_create_repo', 'write_file', 'edit_file', 'execute_shell',
@@ -630,47 +524,39 @@ export class GatewayServer {
   }
 
   private async handleChat(ws: WebSocket, request: ChatRequest): Promise<void> {
-    // Build system prompt server-side from identity files + memory
     const systemPrompt = buildSystemPrompt();
     const { model } = reloadConfig().llm;
 
-    // Get or create a conversation in SQLite (use 'webchat' as session ID)
     const conversationId = memStore.getOrCreateConversation('webchat');
 
-    // Persist new user messages that aren't already in the DB
     const userMessages = request.messages.filter((m: any) => m.role !== 'system');
     const lastUserMsg = [...userMessages].reverse().find((m: any) => m.role === 'user');
     if (lastUserMsg?.content) {
       memStore.insertMessage(conversationId, 'user', lastUserMsg.content);
     }
 
-    // Assemble context from SQLite (summaries + recent messages)
     const assembled = assembleContext(conversationId, systemPrompt, model);
     let baseMessages = assembled.messages;
 
-    // Context window guard — trim if still approaching model limit
     const guard = guardContext(baseMessages, model);
     baseMessages = guard.messages;
     if (guard.trimmed) {
       console.log(`[Gateway] Context trimmed: ~${guard.estimatedTokens}/${guard.contextLimit} tokens`);
     }
 
-    // Check for direct tool intent - bypass LLM for known commands
     const directIntent = this.detectDirectToolIntent(request.messages);
     if (directIntent) {
       console.log(`[Gateway] Direct tool intent: ${directIntent.tool}`);
       try {
         const result = await this.toolRegistry.executeTool(directIntent.tool, directIntent.input, {});
         if (result.success) {
-          // Get the original user message for context
           const lastUser = [...request.messages].reverse().find((m: any) => m.role === 'user');
           const userMsg = lastUser?.content || 'the request';
-          // Ask LLM to present the result naturally - no tools in this step
           const presentMessages: { role: 'system' | 'user' | 'assistant' | 'tool'; content: string }[] = [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: `The user asked: "${userMsg}"\n\nHere is the data retrieved:\n\n${result.output}\n\nRespond naturally and concisely based on this data.` }
           ];
-          const response = await chatWithFailover(this.llmProvider,presentMessages, undefined);
+          const response = await chatWithFailover(this.llmProvider, presentMessages, undefined);
           this.sendMessage(ws, { type: 'chat', payload: { content: response.content || result.output } });
         } else {
           this.sendMessage(ws, { type: 'chat', payload: { content: `Couldn't complete that: ${result.error}` } });
@@ -681,15 +567,13 @@ export class GatewayServer {
       return;
     }
 
-    // Decide whether to include tools, and which ones
     const conversational = this.isConversational(request.messages);
-    const tools = conversational ? undefined : this.getRelevantTools(request.messages);
+    const tools = conversational ? undefined : this.getAllowedTools();
 
     if (conversational) {
       console.log('[Gateway] Conversational - no tools');
     }
 
-    // Agentic loop
     const conversationMessages: Message[] = [...baseMessages];
     let maxTurns = 5;
     let turn = 0;
@@ -701,14 +585,13 @@ export class GatewayServer {
       turn++;
       console.log(`[Gateway] Turn ${turn}`);
 
-      const response = await chatWithFailover(this.llmProvider,conversationMessages, tools);
+      const response = await chatWithFailover(this.llmProvider, conversationMessages, tools);
 
       if (response.content) lastContent = response.content;
 
       if (response.toolUses && response.toolUses.length > 0) {
         console.log(`[Gateway] Tool calls: ${response.toolUses.map(t => t.name).join(', ')}`);
 
-        // Break on repeated identical calls
         const sig = response.toolUses.map(t => `${t.name}:${JSON.stringify(t.input)}`).join('|');
         if (seenToolSignatures.includes(sig)) {
           console.log('[Gateway] Repeated tool call - breaking loop');
@@ -716,14 +599,12 @@ export class GatewayServer {
         }
         seenToolSignatures.push(sig);
 
-        // Add assistant message with tool_calls so Ollama can correlate the results
         conversationMessages.push({
           role: 'assistant',
           content: response.content || '',
           tool_calls: response.toolUses,
         });
 
-        // Execute tools and add results with tool_call_id to close the loop
         for (const toolUse of response.toolUses) {
           console.log(`[Gateway] Executing: ${toolUse.name}`, toolUse.input);
           const result = await this.toolRegistry.executeTool(toolUse.name, toolUse.input, {});
@@ -741,11 +622,9 @@ export class GatewayServer {
         continue;
       }
 
-      // Clean response - but verify it isn't a fabricated success claim
       const verified = this.verifyResponse(response.content || '', seenToolSignatures);
       if (!verified.ok) {
         console.warn(`[Gateway] Fabricated claim detected: "${verified.reason}" — forcing tool use`);
-        // Push the fabrication back as a firm correction and loop again
         conversationMessages.push({ role: 'assistant', content: response.content || '' });
         conversationMessages.push({
           role: 'user',
@@ -756,12 +635,10 @@ export class GatewayServer {
 
       console.log(`[Gateway] Done after ${turn} turn(s)`);
 
-      // Persist assistant response to SQLite
       if (response.content) {
         memStore.insertMessage(conversationId, 'assistant', response.content);
       }
 
-      // Run compaction if needed
       if (needsCompaction(conversationId)) {
         runCompaction(conversationId, this.llmProvider).catch(err =>
           console.error('[Compaction] Background error:', err)
@@ -775,22 +652,19 @@ export class GatewayServer {
       return;
     }
 
-    // Loop ended without a clean text response.
-    // If we have lastContent use it. If not, ask the model to summarize the last tool result.
     console.warn(`[Gateway] Loop ended after ${turn} turns`);
     if (lastContent) {
       this.sendMessage(ws, { type: 'chat', payload: { content: lastContent, stopReason: 'max_turns' } });
       return;
     }
     if (lastToolResult) {
-      // Ask model to synthesize the raw tool result into a natural response
       try {
         const lastUser = [...request.messages].reverse().find((m: any) => m.role === 'user');
         const synthesizeMessages: { role: 'system' | 'user' | 'assistant' | 'tool'; content: string }[] = [
           { role: 'system', content: buildSystemPrompt() },
           { role: 'user', content: `The user asked: "${lastUser?.content || ''}"\n\nHere is the result:\n\n${lastToolResult}\n\nRespond naturally and concisely.` }
         ];
-        const synth = await chatWithFailover(this.llmProvider,synthesizeMessages, undefined);
+        const synth = await chatWithFailover(this.llmProvider, synthesizeMessages, undefined);
         this.sendMessage(ws, { type: 'chat', payload: { content: synth.content || lastToolResult, stopReason: 'max_turns' } });
       } catch {
         this.sendMessage(ws, { type: 'chat', payload: { content: lastToolResult, stopReason: 'max_turns' } });
@@ -800,10 +674,6 @@ export class GatewayServer {
     this.sendMessage(ws, { type: 'chat', payload: { content: "I got stuck on that one. Try rephrasing.", stopReason: 'max_turns' } });
   }
 
-  /**
-   * Run a single message through the agentic loop and return the response string.
-   * Used by the cron runner to execute scheduled jobs without a WebSocket.
-   */
   public async runCronJob(message: string): Promise<string> {
     return this.enqueue(() => this.runCronJobImpl(message));
   }
@@ -815,7 +685,7 @@ export class GatewayServer {
       { role: 'user', content: message },
     ];
 
-    const tools = this.getRelevantTools([{ role: 'user', content: message }]);
+    const tools = this.getAllowedTools();
     const maxTurns = 5;
     let turn = 0;
     let lastContent = '';
@@ -824,7 +694,7 @@ export class GatewayServer {
 
     while (turn < maxTurns) {
       turn++;
-      const response = await chatWithFailover(this.llmProvider,conversationMessages, tools);
+      const response = await chatWithFailover(this.llmProvider, conversationMessages, tools);
       if (response.content) lastContent = response.content;
 
       if (response.toolUses && response.toolUses.length > 0) {
@@ -850,11 +720,10 @@ export class GatewayServer {
       return response.content || lastContent || lastToolResult || 'Done.';
     }
 
-    // Loop ended — synthesize from last tool result if available
     if (lastContent) return lastContent;
     if (lastToolResult) {
       try {
-        const synth = await chatWithFailover(this.llmProvider,[
+        const synth = await chatWithFailover(this.llmProvider, [
           { role: 'system', content: buildSystemPrompt() },
           { role: 'user', content: `Summarize this result concisely:\n\n${lastToolResult}` },
         ], undefined);
@@ -901,7 +770,6 @@ export class GatewayServer {
     try {
       const configPath = path.join(__dirname, '..', '..', 'config.yml');
       const existing = fs.readFileSync(configPath, 'utf-8');
-      // Patch only known safe fields
       let updated = existing;
       if (payload.model !== undefined) {
         updated = updated.replace(/^(\s*model:\s*).*$/m, `$1${payload.model}`);
