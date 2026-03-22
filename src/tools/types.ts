@@ -13,6 +13,12 @@ export interface ToolExecutionResult {
 export interface ToolDefinition {
   name: string;
   description: string;
+  /**
+   * If true, the registry will intercept calls that lack `confirmed: true` in
+   * input and return a confirmation-request result. The LLM is expected to ask
+   * the user, then retry with confirmed: true.
+   */
+  requiresConfirmation?: boolean;
   inputSchema: {
     type: string;
     properties: Record<string, any>;
