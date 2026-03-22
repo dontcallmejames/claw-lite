@@ -7,7 +7,7 @@ import { validateUrl } from '../security/ssrf.js';
  */
 export const webFetchTool: ToolDefinition = {
   name: 'web_fetch',
-  description: 'Fetch a URL with full HTTP control. Returns response body, headers, and status code. Useful for APIs, JSON endpoints, or when you need more control than web scraping.',
+  description: 'Fetch and return the content of a web page or URL.\n\nUse this when: you have a specific URL and need to read its content; opening a link the user shared; reading documentation, articles, or API responses at a known URL.\nDo NOT use this when: you need to find URLs first — use `web_search` to discover relevant pages, then `web_fetch` to read them.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -59,13 +59,14 @@ export const webFetchTool: ToolDefinition = {
         return { success: false, error: `Blocked: ${ssrf.reason}` };
       }
 
-      // Prepare fetch options
+      // Prepare fetch options — 30s timeout prevents indefinite hangs on slow hosts
       const fetchOptions: RequestInit = {
         method: method.toUpperCase(),
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           ...headers
-        }
+        },
+        signal: AbortSignal.timeout(30000)
       };
 
       if (body && ['POST', 'PUT', 'PATCH'].includes(method.toUpperCase())) {
@@ -86,22 +87,24 @@ export const webFetchTool: ToolDefinition = {
       const isJson = contentType.includes('application/json') || format === 'json';
       const isText = contentType.includes('text/') || format === 'text';
 
-      // Parse response body
+      // Parse response body — always consume as text first so the stream is not
+      // exhausted before the JSON fallback path can read it.
       let responseBody: any;
       let bodyPreview: string;
 
-      try {
-        if (isJson || (format === 'auto' && contentType.includes('json'))) {
-          responseBody = await response.json();
+      const rawText = await response.text();
+      if (isJson || (format === 'auto' && contentType.includes('json'))) {
+        try {
+          responseBody = JSON.parse(rawText);
           bodyPreview = JSON.stringify(responseBody, null, 2);
-        } else {
-          responseBody = await response.text();
-          bodyPreview = responseBody;
+        } catch {
+          // Server claimed JSON but body isn't — return raw text
+          responseBody = rawText;
+          bodyPreview = rawText;
         }
-      } catch (parseError) {
-        // If parsing fails, fall back to text
-        responseBody = await response.text();
-        bodyPreview = responseBody;
+      } else {
+        responseBody = rawText;
+        bodyPreview = rawText;
       }
 
       // Truncate very long responses
