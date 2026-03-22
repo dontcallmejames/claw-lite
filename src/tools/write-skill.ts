@@ -2,13 +2,15 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import type { ToolDefinition, ToolExecutionContext, ToolExecutionResult } from "./types.js";
+import { sanitizeInjectionPatterns } from "../security/external-content.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const writeSkillTool: ToolDefinition = {
   name: "write_skill",
-  description: "Create or update a skill file. Skills are injected into every system prompt and persist across sessions. Use this to give the assistant persistent knowledge about a topic, workflow, or tool.",
+  requiresConfirmation: true,
+  description: "Create or update a skill file in the skills/ directory and commit it to git.\n\nUse this when: asked to create a new skill, update an existing skill, or save a behavioral rule for the assistant.\nDo NOT use this when: you're writing a general file unrelated to skills — use `write_and_commit` or the `file` tool instead.",
   inputSchema: {
     type: "object",
     properties: {
@@ -36,7 +38,8 @@ export const writeSkillTool: ToolDefinition = {
         fs.mkdirSync(skillsDir, { recursive: true });
       }
       const filePath = path.join(skillsDir, safeName + ".md");
-      fs.writeFileSync(filePath, input.content, "utf-8");
+      const safeContent = sanitizeInjectionPatterns(String(input.content));
+      fs.writeFileSync(filePath, safeContent, "utf-8");
       return { success: true, output: "Skill written to " + filePath };
     } catch (error: any) {
       return { success: false, error: "Failed to write skill: " + error.message };
