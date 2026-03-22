@@ -9,7 +9,7 @@ const __dirname = path.dirname(__filename);
 
 export const modelSwitchTool: ToolDefinition = {
   name: 'switch_model',
-  description: 'Switch between different LLM models and automatically restart. Good choices: qwen2.5-coder:14b (best for code/tools), qwen2.5:14b (general), qwen2.5:7b (fast), llama3.1:8b (lightweight). DeepSeek-R1 models do NOT support tools and cannot be used.',
+  description: 'Switch the active LLM provider and model at runtime without restarting the assistant.\n\nUse this when: asked to change the AI model or provider (e.g., "switch to GPT-4", "use Ollama instead").\nDo NOT use this when: you want to change other config settings — use `update_config` for general configuration changes.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -56,8 +56,9 @@ export const modelSwitchTool: ToolDefinition = {
       const configPath = path.join(__dirname, '..', '..', 'config.yml');
       let configContent = fs.readFileSync(configPath, 'utf-8');
 
-      // Get current model
-      const currentModelMatch = configContent.match(/model:\s*(\S+)/);
+      // Get current model — scope to the llm: section to avoid matching
+      // commented-out lines or model: keys in other sections.
+      const currentModelMatch = configContent.match(/^llm:[\s\S]*?\n[ \t]+model:[ \t]+(\S+)/m);
       const currentModel = currentModelMatch ? currentModelMatch[1] : 'unknown';
 
       if (currentModel === model) {
@@ -67,10 +68,11 @@ export const modelSwitchTool: ToolDefinition = {
         };
       }
 
-      // Update the model in config
+      // Update the model in config — scope to llm: section so that commented-out
+      // model: lines or other sections with a model: key are not touched.
       configContent = configContent.replace(
-        /model:\s*\S+/,
-        `model: ${model}`
+        /(^llm:[\s\S]*?\n[ \t]+model:[ \t]+)\S+/m,
+        `$1${model}`
       );
 
       // Adjust temperature based on model type
@@ -107,7 +109,7 @@ export const modelSwitchTool: ToolDefinition = {
       if (auto_restart) {
         // Schedule restart after a short delay to allow response to be sent
         setTimeout(() => {
-          console.log(`\n🔄 Restarting with model: ${model}${reasonText}`);
+          console.log(`\nRestarting with model: ${model}${reasonText}`);
 
           // Spawn new process
           const projectRoot = path.join(__dirname, '..', '..');
