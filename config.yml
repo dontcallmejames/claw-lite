@@ -10,6 +10,7 @@ llm:
   #   qwen3.5:9b          — local, no cost, decent tool use
   #   qwen2.5-coder:14b   — best local for code writing
   model: gpt-4o
+  fallback: []
   maxTokens: 4096
   temperature: 0.8
 
@@ -53,7 +54,7 @@ security:
 
 # Telegram Channel
 telegram:
-  token: "your-telegram-bot-token-here"
+  # token is read from TELEGRAM_TOKEN env var — do not hardcode here
   allowed_chat_ids: []   # Your personal Telegram chat ID (get from @userinfobot)
 
 # Heartbeat
