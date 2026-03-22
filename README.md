@@ -6,12 +6,12 @@ A lightweight, self-hosted AI assistant with multi-channel support, persistent m
 
 - **Multi-provider LLM** — OpenAI (API key or OAuth), Anthropic, Ollama (local)
 - **Channels** — Discord, Telegram, and a built-in Web UI
-- **25+ tools** — GitHub, web search, file operations, shell commands, memory, and more
+- **17 tools** — 4 consolidated domain tools + 13 standalones covering files, system, memory, GitHub, web, messaging, and self-management
 - **Persistent memory** — SQLite-backed with hierarchical DAG summarization (inspired by [lossless-claw](https://github.com/Martian-Engineering/lossless-claw))
 - **Automatic context compaction** — never lose conversation history; old messages are summarized, not dropped
 - **Full-text search** — FTS5 search across all past conversations
 - **Model failover** — automatic retry with fallback models on API errors
-- **Security** — SSRF protection, prompt injection defenses, DM pairing for unknown senders
+- **Security hardening** — SSRF protection, 32-pattern prompt injection defenses, requiresConfirmation gate, shell allowlist, file sandbox, path traversal prevention
 - **Cron scheduler** — run tasks on a schedule with channel notifications
 - **Customizable persona** — edit `SOUL.md` and `IDENTITY.md` to give your assistant any personality
 
@@ -37,12 +37,13 @@ cp .env.example .env
 cp config.example.yml config.yml
 ```
 
-Edit `.env` with your API keys (see "LLM Setup" below for which you need):
+Edit `.env` with your API keys:
 
 ```env
 BRAVE_SEARCH_API_KEY=your-brave-key
 GITHUB_TOKEN=ghp_your-token
 DISCORD_BOT_TOKEN=your-discord-bot-token
+TELEGRAM_TOKEN=your-telegram-bot-token
 ```
 
 Edit `config.yml` to set your provider and model:
@@ -56,31 +57,19 @@ llm:
 
 ### LLM Setup
 
-You have two options for connecting to an LLM:
-
 #### Option A: OpenAI OAuth (ChatGPT subscription — no API credits needed)
 
-If you have a ChatGPT Plus/Pro/Team subscription, you can use OAuth to connect without an API key. This uses your subscription quota instead of paid API credits.
+If you have a ChatGPT Plus/Pro/Team subscription, you can use OAuth to connect without an API key:
 
 ```bash
 npm run login
 ```
 
-This opens a browser window to sign in with your ChatGPT account. Once authenticated, the token is saved to `~/.davos/auth.json` and refreshed automatically. Check status with:
+This opens a browser window to sign in with your ChatGPT account. Check status with:
 
 ```bash
 npm run login:status
 ```
-
-Then set your model in `config.yml`:
-
-```yaml
-llm:
-  provider: openai
-  model: gpt-4o          # or gpt-4o-mini, etc.
-```
-
-No `OPENAI_API_KEY` needed in `.env` when using OAuth.
 
 #### Option B: API Key (OpenAI, Anthropic, or Ollama)
 
@@ -94,7 +83,7 @@ OPENAI_API_KEY=sk-your-key-here
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 
-For **Ollama** (free, local), just install [Ollama](https://ollama.ai), pull a model (`ollama pull qwen2.5:14b`), and set:
+For **Ollama** (free, local), install [Ollama](https://ollama.ai), pull a model, and set:
 
 ```yaml
 llm:
@@ -143,8 +132,8 @@ No setup needed. Available at `http://127.0.0.1:8080` when the server is running
 ### Telegram
 
 1. Message [@BotFather](https://t.me/BotFather) and create a new bot
-2. Copy the token to `config.yml` under `telegram.token`
-3. Get your chat ID from [@userinfobot](https://t.me/userinfobot) and add it to `telegram.allowed_chat_ids`
+2. Copy the token to `.env` as `TELEGRAM_TOKEN`
+3. Get your chat ID from [@userinfobot](https://t.me/userinfobot) and add it to `telegram.allowed_chat_ids` in `config.yml`
 
 ## Configuration
 
@@ -158,7 +147,6 @@ No setup needed. Available at `http://127.0.0.1:8080` when the server is running
 | `llm` | `fallback` | `[]` | Fallback models on API failure |
 | `gateway` | `port` | `8080` | HTTP/WebSocket port |
 | `security` | `dmPolicy` | `open` | `open`, `pairing`, or `off` |
-| `tools` | `profile` | `full` | `minimal`, `coding`, or `full` |
 | `tools` | `deny` | `[]` | Tool names to block |
 
 ### Environment Variables
@@ -170,22 +158,50 @@ No setup needed. Available at `http://127.0.0.1:8080` when the server is running
 | `BRAVE_SEARCH_API_KEY` | For web search | [Brave Search](https://api.search.brave.com) key |
 | `GITHUB_TOKEN` | For GitHub tools | PAT with `repo` scope |
 | `DISCORD_BOT_TOKEN` | For Discord | Discord bot token |
+| `TELEGRAM_TOKEN` | For Telegram | Telegram bot token from @BotFather |
 
-## Tools (25+)
+## Tools (17)
+
+### Domain Tools (consolidated, action-based)
+
+| Tool | Actions | Description |
+|------|---------|-------------|
+| `file` | `read`, `write`, `edit`, `list`, `delete`, `move`, `mkdir` | Local filesystem operations. All paths sandboxed to `basePath`; protected files (`.env`, `config.yml`, etc.) blocked from write/delete. |
+| `system` | `monitor`, `shell`, `list_processes`, `process_info`, `kill_process` | System monitoring and process management. Shell uses a SAFE/BLOCKED/allowed-list tier; metacharacter injection blocked. |
+| `memory` | `save`, `recall`, `search`, `describe`, `query`, `delete` | Persistent key-value memory + full-text search over conversation history and summaries. |
+| `github` | `read_file`, `write_file`, `delete_file`, `list_files`, `create_repo`, `search_code`, `repo_info` | GitHub API operations. All paths encoded to prevent traversal. |
+
+### Standalone Tools (13)
 
 | Tool | Description |
 |------|-------------|
-| `read_file` / `write_file` / `edit_file` | File operations (absolute or relative paths) |
-| `web_search` | Brave Search with content wrapping |
-| `web_fetch` | Fetch URLs with SSRF protection |
-| `execute_shell` | Shell commands (safe/blocked/allowed tiers) |
-| `remember` / `recall` | Key-value persistent memory |
-| `memory_search` | Full-text search across conversation history |
-| `memory_query` | Answer questions from past conversations |
-| `github_*` | Read, write, list, search, commit to GitHub repos |
-| `send_message` / `schedule_message` | Send or schedule messages to Telegram/Discord (one-shot reminders or recurring) |
-| `morning_briefing` | Daily briefing (weather, news, GitHub) |
-| `switch_model` | Change LLM model at runtime |
+| `schedule_message` | Schedule future messages via cron expressions (5-field, per-field range validated). Requires user confirmation. |
+| `send_message` | Send an immediate message to Telegram or Discord. |
+| `morning_briefing` | Fetch weather (wttr.in) + BBC world headlines + TechCrunch tech news concurrently. |
+| `web_fetch` | Fetch and parse a URL. 30s timeout; SSRF protection blocks private/internal addresses. |
+| `web_search` | Brave Search API integration. Results wrapped in injection-safe boundaries. |
+| `write_and_commit` | Write a file locally and commit it to a GitHub repo in one atomic operation (GitHub first). |
+| `write_skill` | Create or update a skill file in `skills/`. Path traversal sanitized. Requires confirmation. |
+| `get_config` | Read the current `config.yml` settings. |
+| `update_config` | Update a config field by key path (e.g. `llm.model`). Injection-safe regex anchoring. Requires confirmation. |
+| `install_dependency` | Install an npm package. Package name validated against npm naming rules; uses `execFile` to avoid shell injection. Requires confirmation. |
+| `build_assistant` | Recompile TypeScript source (`npm run build`). |
+| `restart_assistant` | Restart the assistant process. Requires confirmation. |
+| `switch_model` | Switch LLM model at runtime; updates `config.yml` and restarts. |
+| `take_screenshot` | Capture the primary screen on Windows (PowerShell). Filename sanitized to prevent injection. |
+
+## Security Hardening
+
+This release includes a comprehensive security pass across the tool layer:
+
+- **Prompt injection defenses** — External content (web pages, GitHub files, memory, RSS feeds) is wrapped with randomized boundary IDs and filtered through 32 injection pattern regexes before being passed to the model.
+- **requiresConfirmation gate** — 5 irreversible tools (`schedule_message`, `restart_assistant`, `update_config`, `install_dependency`, `write_skill`) require `confirmed: true` in the tool input. The registry intercepts unconfirmed calls and instructs the model to ask the user first.
+- **Shell safety** — Three-tier command policy: SAFE_COMMANDS always allowed, BLOCKED_COMMANDS always denied, everything else requires explicit listing in `config.yml`. Shell metacharacters (`& | ; < > ` $ () ! { }`) are rejected outright.
+- **File sandbox** — All `file` tool operations resolve paths relative to `basePath` and verify the resolved path stays inside it. A protected file set (`.env`, `config.yml`, `package.json`, etc.) blocks write, edit, delete, and move operations.
+- **Cron validation** — `schedule_message` validates all 5 cron fields against their numeric ranges before writing. A write lock prevents concurrent calls from losing jobs via interleaved read-modify-write.
+- **GitHub path traversal prevention** — `encodeURIComponent` applied to owner, repo, and path-traversal-dangerous segments (`..`, `.`) in all GitHub API requests.
+- **Telegram token moved to env var** — Token is no longer stored in `config.yml`; read from `TELEGRAM_TOKEN` environment variable only.
+- **SSRF protection** — `web_fetch` validates URLs against a blocklist of private/internal address ranges before making requests.
 
 ## DM Pairing
 
@@ -201,7 +217,7 @@ npm run pairing list              # show pending codes
 ```
   Web UI ──┐
   Discord ─┤── Gateway Server ─┬─ LLM Provider (failover)
-  Telegram ┘   (agentic loop)  ├─ Tool Registry (25+ tools)
+  Telegram ┘   (agentic loop)  ├─ Tool Registry (17 tools)
                                └─ Memory (SQLite + DAG summaries)
 ```
 
@@ -216,7 +232,7 @@ Drop `.md` files in `skills/` to give your assistant persistent knowledge:
 When asked to deploy, always run tests first, then build, then deploy to staging.
 ```
 
-Skills are injected into every system prompt automatically.
+Skills are injected into every system prompt automatically. Use the `write_skill` tool to create them from a conversation.
 
 ## License
 
