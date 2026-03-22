@@ -2,6 +2,21 @@ import type { ToolDefinition, ToolExecutionResult } from './types.js';
 import fs from 'fs';
 import path from 'path';
 
+const PROTECTED_NAMES = new Set([
+  '.env', 'config.yml', 'config.yaml',
+  'auth.json', 'package.json', 'tsconfig.json',
+]);
+
+/**
+ * Return true if the resolved path is inside allowedRoot.
+ */
+function isInsideRoot(resolvedPath: string, allowedRoot: string): boolean {
+  const normalRoot = allowedRoot.replace(/\\/g, '/');
+  const normalPath = resolvedPath.replace(/\\/g, '/');
+  const rootWithSep = normalRoot.endsWith('/') ? normalRoot : normalRoot + '/';
+  return normalPath === normalRoot || normalPath.startsWith(rootWithSep);
+}
+
 const GITHUB_API = 'https://api.github.com';
 
 function getToken(): string | null {
@@ -29,8 +44,13 @@ async function ghPut(owner: string, repo: string, filePath: string, content: str
     if (res.ok) {
       const data = await res.json() as any;
       sha = data.sha;
+    } else if (res.status !== 404) {
+      // Only 404 means the file doesn't exist yet — other errors (auth, rate-limit)
+      // must propagate so the caller isn't misled about why the PUT fails.
+      const errText = await res.text();
+      throw new Error(`GitHub ${res.status}: ${errText}`);
     }
-  } catch { /* new file */ }
+  } catch (e) { throw e; }
 
   const body: any = {
     message,
@@ -60,17 +80,13 @@ async function ghPut(owner: string, repo: string, filePath: string, content: str
 
 /**
  * Write a file to disk AND commit it to a GitHub repo in one step.
- * Use this whenever asked to create or update a file in a project.
- *
- * owner and repo are required — no defaults.
- * Default branch: main
  */
 export const writeAndCommitTool: ToolDefinition = {
   name: 'write_and_commit',
-  description: `Write a file to a GitHub repository AND optionally to local disk in a single step.
-Use this when asked to create or update files in a project.
-The 'owner' and 'repo' fields are required. Default branch: main.
-The 'content' field is the full file content as a string.`,
+  description: `Write a file to the local filesystem and immediately commit it to the git repository with a commit message.
+
+Use this when: you need to create or overwrite a file AND have it committed to git in one step — for example, saving a new skill file, updating a document, or persisting a configuration change with a record.
+Do NOT use this when: you just want to write a file without committing — use the \`file\` tool's write action instead. Do NOT use this when: the file is in a GitHub remote repo — use the \`github\` tool.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -88,7 +104,7 @@ The 'content' field is the full file content as a string.`,
       },
       owner: {
         type: 'string',
-        description: 'GitHub repo owner (username or org)'
+        description: 'GitHub repo owner (default: dontcallmejames)'
       },
       repo: {
         type: 'string',
@@ -103,7 +119,7 @@ The 'content' field is the full file content as a string.`,
         description: 'Optional: also write to this absolute local path'
       }
     },
-    required: ['path', 'content', 'message', 'owner', 'repo']
+    required: ['path', 'content', 'message']
   },
 
   async execute(input: Record<string, any>): Promise<ToolExecutionResult> {
@@ -111,31 +127,46 @@ The 'content' field is the full file content as a string.`,
       path: filePath,
       content,
       message,
-      owner,
+      owner = 'dontcallmejames',
       repo,
       branch = 'main',
       local_path,
     } = input;
 
-    const results: string[] = [];
-
-    // Write to local disk if requested
-    if (local_path) {
-      try {
-        fs.mkdirSync(path.dirname(local_path), { recursive: true });
-        fs.writeFileSync(local_path, content, 'utf-8');
-        results.push(`Written locally: ${local_path}`);
-      } catch (err: any) {
-        results.push(`Local write failed: ${err.message}`);
-      }
+    if (!repo) {
+      return { success: false, error: 'repo is required' };
     }
 
-    // Commit to GitHub
+    const results: string[] = [];
+
+    // Commit to GitHub FIRST so a GitHub failure doesn't leave the local file
+    // modified without a corresponding remote commit.
     try {
       const url = await ghPut(owner, repo, filePath, content, message, branch);
       results.push(`Committed to GitHub: ${url}`);
     } catch (err: any) {
-      return { success: false, error: `GitHub commit failed: ${err.message}\n${results.join('\n')}` };
+      return { success: false, error: `GitHub commit failed: ${err.message}` };
+    }
+
+    // Write to local disk only after the GitHub commit succeeded
+    if (local_path) {
+      try {
+        const resolvedLocal = path.resolve(local_path);
+        const allowedRoot = process.cwd();
+        // Sandbox: local_path must be within process.cwd()
+        if (!isInsideRoot(resolvedLocal, allowedRoot)) {
+          return { success: false, error: `local_path is outside the allowed directory (${allowedRoot})` };
+        }
+        // Block protected filenames
+        if (PROTECTED_NAMES.has(path.basename(resolvedLocal))) {
+          return { success: false, error: `Write blocked: ${path.basename(resolvedLocal)} is a protected file` };
+        }
+        fs.mkdirSync(path.dirname(resolvedLocal), { recursive: true });
+        fs.writeFileSync(resolvedLocal, content, 'utf-8');
+        results.push(`Written locally: ${resolvedLocal}`);
+      } catch (err: any) {
+        results.push(`Local write failed: ${err.message}`);
+      }
     }
 
     return { success: true, output: results.join('\n') };
