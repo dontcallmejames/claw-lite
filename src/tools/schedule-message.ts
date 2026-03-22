@@ -1,6 +1,7 @@
 import type { ToolDefinition, ToolExecutionContext, ToolExecutionResult } from './types.js';
 import fs from 'fs';
 import path from 'path';
+import { sanitizeInjectionPatterns } from '../security/external-content.js';
 
 const CRONS_PATH = path.resolve(process.cwd(), 'crons.json');
 
@@ -17,17 +18,38 @@ function writeCrons(data: { jobs: any[] }): void {
   fs.writeFileSync(CRONS_PATH, JSON.stringify(data, null, 2), 'utf-8');
 }
 
+// In-process write lock: serialises concurrent schedule_message calls so the
+// read→modify→write sequence is never interleaved, preventing job loss.
+let writeLock: Promise<void> = Promise.resolve();
+
+function withWriteLock(fn: () => void): Promise<void> {
+  writeLock = writeLock.then(fn);
+  return writeLock;
+}
+
+/**
+ * Validate a single cron field against its allowed numeric range.
+ * Accepts '*' and step expressions (*\/N) as always valid.
+ */
+function validateCronField(value: string, min: number, max: number): boolean {
+  if (value === '*') return true;
+  if (value.startsWith('*/')) {
+    // Step value must be a positive integer in a sensible range.
+    // */0 is meaningless; */999 is technically parseable but nonsensical.
+    const step = parseInt(value.slice(2), 10);
+    return !isNaN(step) && step > 0 && step <= 60;
+  }
+  const n = parseInt(value, 10);
+  return !isNaN(n) && String(n) === value && n >= min && n <= max;
+}
+
 export const scheduleMessageTool: ToolDefinition = {
   name: 'schedule_message',
-  description: `Schedule a message or reminder for later delivery. Creates a cron job that fires on the given schedule and sends the result to a channel.
+  requiresConfirmation: true,
+  description: `Schedule a message to be sent to the user at a specific future time.
 
-Examples:
-- "Remind me at 3pm to check the deploy" → schedule: "0 15 * * *", oneShot: true
-- "Every morning at 8am, send me a briefing on Telegram" → schedule: "0 8 * * *"
-- "In 5 minutes, ping me on Discord" → calculate the cron for 5 minutes from now, oneShot: true
-
-Cron format: minute hour day-of-month month day-of-week
-Examples: "30 14 * * *" = 2:30 PM daily, "0 9 * * 1-5" = 9 AM weekdays`,
+Use this when: the user asks you to remind them of something later, or when you want to send a message at a specific time in the future.
+Do NOT use this when: the message should go out immediately — use \`send_message\` instead.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -59,7 +81,7 @@ Examples: "30 14 * * *" = 2:30 PM daily, "0 9 * * 1-5" = 9 AM weekdays`,
   async execute(input: Record<string, any>): Promise<ToolExecutionResult> {
     const { name, schedule, message, channel, oneShot = false } = input;
 
-    // Validate cron expression (basic check)
+    // Validate cron expression — field count and numeric ranges.
     const parts = schedule.trim().split(/\s+/);
     if (parts.length < 5) {
       return {
@@ -67,21 +89,38 @@ Examples: "30 14 * * *" = 2:30 PM daily, "0 9 * * 1-5" = 9 AM weekdays`,
         error: `Invalid cron schedule: "${schedule}". Must have 5 fields: minute hour day-of-month month day-of-week.`
       };
     }
+    const [cronMin, cronHour, cronDom, cronMonth, cronDow] = parts;
+    const rangeErrors: string[] = [];
+    if (!validateCronField(cronMin,   0,  59)) rangeErrors.push(`minute must be 0-59 (got "${cronMin}")`);
+    if (!validateCronField(cronHour,  0,  23)) rangeErrors.push(`hour must be 0-23 (got "${cronHour}")`);
+    if (!validateCronField(cronDom,   1,  31)) rangeErrors.push(`day-of-month must be 1-31 (got "${cronDom}")`);
+    if (!validateCronField(cronMonth, 1,  12)) rangeErrors.push(`month must be 1-12 (got "${cronMonth}")`);
+    if (!validateCronField(cronDow,   0,   7)) rangeErrors.push(`day-of-week must be 0-7 (got "${cronDow}")`);
+    if (rangeErrors.length > 0) {
+      return {
+        success: false,
+        error: `Invalid cron schedule "${schedule}": ${rangeErrors.join('; ')}`
+      };
+    }
 
     try {
-      const cronFile = readCrons();
       const job = {
         id: Date.now().toString(),
         name,
         schedule,
-        message,
+        message: sanitizeInjectionPatterns(message),
         enabled: true,
         channel: channel === 'all' ? undefined : channel,
         oneShot,
       };
 
-      cronFile.jobs.push(job);
-      writeCrons(cronFile);
+      // Use write lock to prevent concurrent calls from losing jobs via
+      // interleaved read→modify→write sequences.
+      await withWriteLock(() => {
+        const cronFile = readCrons();
+        cronFile.jobs.push(job);
+        writeCrons(cronFile);
+      });
 
       const channelLabel = channel && channel !== 'all' ? ` → ${channel}` : ' → all channels';
       const shotLabel = oneShot ? ' (one-time)' : ' (recurring)';
