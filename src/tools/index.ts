@@ -13,6 +13,7 @@ import { writeSkillTool } from './write-skill.js';
 import { getConfigTool } from './get-config.js';
 import { sendMessageTool } from './send-message.js';
 import { scheduleMessageTool } from './schedule-message.js';
+import { screenshotTool } from './screenshot.js';
 
 export * from './types.js';
 export * from './registry.js';
@@ -41,6 +42,7 @@ export function initializeTools(): void {
   registry.registerTool(buildTool);
   registry.registerTool(writeAndCommitTool);
   registry.registerTool(writeSkillTool);
+  registry.registerTool(screenshotTool);
 
   console.log(`Initialized ${registry.getAllTools().length} tools`);
 }

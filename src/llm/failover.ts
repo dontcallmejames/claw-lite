@@ -22,16 +22,17 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Try the primary model, then fall back to alternatives on retryable errors.
- * Temporarily overrides config.llm.model for each attempt.
+ * Reads model candidates from config at call time but never mutates the shared
+ * config singleton — the provider's own model setting is used for actual calls.
  */
 export async function chatWithFailover(
   provider: LLMProvider,
   messages: Message[],
   tools?: Tool[]
 ): Promise<ChatResponse> {
-  const config = reloadConfig();
-  const primary = config.llm.model;
-  const fallbacks: string[] = (config.llm as any).fallback ?? [];
+  const cfg = reloadConfig();
+  const primary = cfg.llm.model;
+  const fallbacks: string[] = (cfg.llm as any).fallback ?? [];
   const candidates = [primary, ...fallbacks];
 
   let lastError: any;
@@ -39,23 +40,16 @@ export async function chatWithFailover(
   for (let i = 0; i < candidates.length; i++) {
     const model = candidates[i];
 
-    // Temporarily override the model in config for this attempt
     if (model !== primary) {
-      (config.llm as any).model = model;
       console.log(`[Failover] Trying fallback model: ${model}`);
     }
 
     try {
       const response = await provider.chat(messages, tools);
-      // Restore original model
-      (config.llm as any).model = primary;
       return response;
     } catch (err: any) {
       lastError = err;
       console.error(`[Failover] ${model} failed: ${err.message}`);
-
-      // Restore original model
-      (config.llm as any).model = primary;
 
       if (!isRetryable(err) || i === candidates.length - 1) {
         break;

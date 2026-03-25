@@ -1,5 +1,7 @@
 import * as nodeCron from 'node-cron';
 import fs from 'fs';
+import { wrapExternalContent } from '../security/external-content.js';
+import * as memStore from '../memory/store.js';
 
 export interface CronJob {
   id: string;
@@ -22,6 +24,7 @@ export class CronRunner {
   private running = new Set<string>();
   private watcher: fs.FSWatcher | null = null;
   private selfWriting = false;
+  private writeLock: Promise<void> = Promise.resolve();
   private onMessage: (message: string) => Promise<string>;
   private broadcast: (content: string, jobName: string, channel?: string) => void;
 
@@ -109,8 +112,14 @@ export class CronRunner {
     console.log(`[Cron] Running job: ${job.name}`);
 
     try {
-      const result = await this.onMessage(job.message);
+      const safeMessage = wrapExternalContent(job.message, `cron-job:${job.name}`);
+      const result = await this.onMessage(safeMessage);
       this.broadcast(result, job.name, job.channel);
+
+      // Persist cron output to SQLite so it is searchable via memory_search
+      const convId = memStore.getOrCreateConversation('cron');
+      memStore.insertMessage(convId, 'assistant', result);
+
       this.updateLastRun(job.id);
 
       // One-shot jobs disable after first fire
@@ -128,37 +137,41 @@ export class CronRunner {
   }
 
   private disableJob(jobId: string): void {
-    try {
-      const cronFile: CronFile = JSON.parse(fs.readFileSync(this.cronPath, 'utf-8'));
-      const job = cronFile.jobs.find(j => j.id === jobId);
-      if (job) {
-        job.enabled = false;
-        this.selfWriting = true;
-        fs.writeFileSync(this.cronPath, JSON.stringify(cronFile, null, 2), 'utf-8');
+    this.writeLock = this.writeLock.then(() => {
+      try {
+        const cronFile: CronFile = JSON.parse(fs.readFileSync(this.cronPath, 'utf-8'));
+        const job = cronFile.jobs.find(j => j.id === jobId);
+        if (job) {
+          job.enabled = false;
+          this.selfWriting = true;
+          fs.writeFileSync(this.cronPath, JSON.stringify(cronFile, null, 2), 'utf-8');
+          this.selfWriting = false;
+        }
+        // Stop the task
+        const task = this.tasks.get(jobId);
+        if (task) { task.stop(); this.tasks.delete(jobId); }
+      } catch (err) {
         this.selfWriting = false;
+        console.error('[Cron] Failed to disable job:', err);
       }
-      // Stop the task
-      const task = this.tasks.get(jobId);
-      if (task) { task.stop(); this.tasks.delete(jobId); }
-    } catch (err) {
-      this.selfWriting = false;
-      console.error('[Cron] Failed to disable job:', err);
-    }
+    });
   }
 
   private updateLastRun(jobId: string): void {
-    try {
-      const cronFile: CronFile = JSON.parse(fs.readFileSync(this.cronPath, 'utf-8'));
-      const job = cronFile.jobs.find(j => j.id === jobId);
-      if (job) {
-        job.lastRun = new Date().toISOString();
-        this.selfWriting = true;
-        fs.writeFileSync(this.cronPath, JSON.stringify(cronFile, null, 2), 'utf-8');
+    this.writeLock = this.writeLock.then(() => {
+      try {
+        const cronFile: CronFile = JSON.parse(fs.readFileSync(this.cronPath, 'utf-8'));
+        const job = cronFile.jobs.find(j => j.id === jobId);
+        if (job) {
+          job.lastRun = new Date().toISOString();
+          this.selfWriting = true;
+          fs.writeFileSync(this.cronPath, JSON.stringify(cronFile, null, 2), 'utf-8');
+          this.selfWriting = false;
+        }
+      } catch (err) {
         this.selfWriting = false;
+        console.error('[Cron] Failed to update lastRun:', err);
       }
-    } catch (err) {
-      this.selfWriting = false;
-      console.error('[Cron] Failed to update lastRun:', err);
-    }
+    });
   }
 }

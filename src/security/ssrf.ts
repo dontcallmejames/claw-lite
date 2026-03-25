@@ -62,7 +62,8 @@ export async function validateUrl(url: string): Promise<{ ok: boolean; reason?: 
       return { ok: false, reason: `Blocked: ${hostname} resolves to private IP ${result.address}` };
     }
   } catch {
-    // DNS resolution failed — let fetch handle it
+    // DNS resolution failed — block the request rather than failing open.
+    return { ok: false, reason: `DNS resolution failed for ${hostname}` };
   }
 
   return { ok: true };

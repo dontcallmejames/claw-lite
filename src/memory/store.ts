@@ -1,6 +1,58 @@
 import { randomUUID } from 'crypto';
 import { getDb } from './db.js';
 
+// ---- Row types ----
+
+export interface MessageRow {
+  id: number;
+  conversation_id: number;
+  seq: number;
+  role: string;
+  content: string;
+  token_count: number;
+  created_at: string;
+}
+
+export interface SummaryRow {
+  id: string;
+  conversation_id: number;
+  kind: 'leaf' | 'condensed';
+  depth: number;
+  content: string;
+  token_count: number;
+  earliest_at: string | null;
+  latest_at: string | null;
+  descendant_count: number;
+  created_at: string;
+}
+
+export interface SearchMessageRow {
+  id: number;
+  role: string;
+  content: string;
+  created_at: string;
+  conversation_id: number;
+  snippet?: string;
+}
+
+export interface SearchSummaryRow {
+  id: string;
+  kind: string;
+  depth: number;
+  content: string;
+  earliest_at: string | null;
+  latest_at: string | null;
+  descendant_count: number;
+  created_at: string;
+}
+
+export interface KvRow {
+  key: string;
+  category: string;
+  value: string;
+  date: string | null;
+}
+
 // ---- Conversations ----
 
 export function getOrCreateConversation(sessionId: string): number {
@@ -53,8 +105,8 @@ export function insertMessage(
   return messageId;
 }
 
-export function getMessageById(messageId: number): any {
-  return getDb().prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+export function getMessageById(messageId: number): MessageRow | undefined {
+  return getDb().prepare('SELECT * FROM messages WHERE id = ?').get(messageId) as MessageRow | undefined;
 }
 
 // ---- Summaries ----
@@ -99,26 +151,26 @@ export function insertSummary(
   return id;
 }
 
-export function getSummaryById(summaryId: string): any {
-  return getDb().prepare('SELECT * FROM summaries WHERE id = ?').get(summaryId);
+export function getSummaryById(summaryId: string): SummaryRow | undefined {
+  return getDb().prepare('SELECT * FROM summaries WHERE id = ?').get(summaryId) as SummaryRow | undefined;
 }
 
-export function getSummarySourceMessages(summaryId: string): any[] {
+export function getSummarySourceMessages(summaryId: string): MessageRow[] {
   return getDb().prepare(`
     SELECT m.* FROM messages m
     JOIN summary_messages sm ON sm.message_id = m.id
     WHERE sm.summary_id = ?
     ORDER BY m.seq
-  `).all(summaryId);
+  `).all(summaryId) as MessageRow[];
 }
 
-export function getSummaryChildSummaries(summaryId: string): any[] {
+export function getSummaryChildSummaries(summaryId: string): SummaryRow[] {
   return getDb().prepare(`
     SELECT s.* FROM summaries s
     JOIN summary_parents sp ON sp.parent_summary_id = s.id
     WHERE sp.summary_id = ?
     ORDER BY s.created_at
-  `).all(summaryId);
+  `).all(summaryId) as SummaryRow[];
 }
 
 // ---- Context Items ----
@@ -135,6 +187,7 @@ export interface ContextItem {
   kind?: string;
   depth?: number;
   descendant_count?: number;
+  created_at?: string;
 }
 
 export function getContextItems(conversationId: number): ContextItem[] {
@@ -144,7 +197,8 @@ export function getContextItems(conversationId: number): ContextItem[] {
       ci.ordinal, ci.item_type, ci.message_id, ci.summary_id,
       m.role, COALESCE(m.content, s.content) as content,
       COALESCE(m.token_count, s.token_count) as token_count,
-      s.kind, s.depth, s.descendant_count
+      s.kind, s.depth, s.descendant_count,
+      COALESCE(m.created_at, s.created_at) as created_at
     FROM context_items ci
     LEFT JOIN messages m ON ci.message_id = m.id
     LEFT JOIN summaries s ON ci.summary_id = s.id
@@ -205,7 +259,7 @@ export function replaceContextRange(
 
 // ---- Search ----
 
-export function searchMessages(query: string, conversationId?: number, limit = 10): any[] {
+export function searchMessages(query: string, conversationId?: number, limit = 10): SearchMessageRow[] {
   const db = getDb();
   try {
     if (conversationId) {
@@ -217,7 +271,7 @@ export function searchMessages(query: string, conversationId?: number, limit = 1
         WHERE messages_fts MATCH ? AND m.conversation_id = ?
         ORDER BY rank
         LIMIT ?
-      `).all(query, conversationId, limit);
+      `).all(query, conversationId, limit) as SearchMessageRow[];
     }
     return db.prepare(`
       SELECT m.id, m.role, m.content, m.created_at, m.conversation_id,
@@ -227,22 +281,22 @@ export function searchMessages(query: string, conversationId?: number, limit = 1
       WHERE messages_fts MATCH ?
       ORDER BY rank
       LIMIT ?
-    `).all(query, limit);
+    `).all(query, limit) as SearchMessageRow[];
   } catch {
     // FTS5 fallback: LIKE search
     const pattern = `%${query}%`;
     if (conversationId) {
       return db.prepare(
         'SELECT id, role, content, created_at, conversation_id FROM messages WHERE content LIKE ? AND conversation_id = ? LIMIT ?'
-      ).all(pattern, conversationId, limit);
+      ).all(pattern, conversationId, limit) as SearchMessageRow[];
     }
     return db.prepare(
       'SELECT id, role, content, created_at, conversation_id FROM messages WHERE content LIKE ? LIMIT ?'
-    ).all(pattern, limit);
+    ).all(pattern, limit) as SearchMessageRow[];
   }
 }
 
-export function searchSummaries(query: string, conversationId?: number, limit = 10): any[] {
+export function searchSummaries(query: string, conversationId?: number, limit = 10): SearchSummaryRow[] {
   const db = getDb();
   try {
     const baseQuery = conversationId
@@ -258,13 +312,13 @@ export function searchSummaries(query: string, conversationId?: number, limit = 
          ORDER BY rank LIMIT ?`;
 
     return conversationId
-      ? db.prepare(baseQuery).all(query, conversationId, limit)
-      : db.prepare(baseQuery).all(query, limit);
+      ? db.prepare(baseQuery).all(query, conversationId, limit) as SearchSummaryRow[]
+      : db.prepare(baseQuery).all(query, limit) as SearchSummaryRow[];
   } catch {
     const pattern = `%${query}%`;
     return db.prepare(
       'SELECT id, kind, depth, content, earliest_at, latest_at, descendant_count, created_at FROM summaries WHERE content LIKE ? LIMIT ?'
-    ).all(pattern, limit);
+    ).all(pattern, limit) as SearchSummaryRow[];
   }
 }
 
@@ -277,12 +331,12 @@ export function kvSet(key: string, category: string, value: string, date?: strin
   `).run(key, category, value, date ?? null);
 }
 
-export function kvGet(key: string): any {
-  return getDb().prepare('SELECT * FROM key_value_memory WHERE key = ?').get(key);
+export function kvGet(key: string): KvRow | undefined {
+  return getDb().prepare('SELECT * FROM key_value_memory WHERE key = ?').get(key) as KvRow | undefined;
 }
 
-export function kvGetByCategory(category: string): any[] {
-  return getDb().prepare('SELECT * FROM key_value_memory WHERE category = ?').all(category);
+export function kvGetByCategory(category: string): KvRow[] {
+  return getDb().prepare('SELECT * FROM key_value_memory WHERE category = ?').all(category) as KvRow[];
 }
 
 export function kvDelete(key: string): boolean {
@@ -290,6 +344,6 @@ export function kvDelete(key: string): boolean {
   return result.changes > 0;
 }
 
-export function kvGetAll(): any[] {
-  return getDb().prepare('SELECT * FROM key_value_memory ORDER BY category, key').all();
+export function kvGetAll(): KvRow[] {
+  return getDb().prepare('SELECT * FROM key_value_memory ORDER BY category, key').all() as KvRow[];
 }

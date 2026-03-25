@@ -84,8 +84,8 @@ export async function compactLeaf(
     ]);
 
     const sourceMessageIds = chunk.map(c => c.message_id!).filter(Boolean);
-    const earliestAt = chunk[0].content ? new Date().toISOString() : undefined;
-    const latestAt = chunk[chunk.length - 1].content ? new Date().toISOString() : undefined;
+    const earliestAt = chunk[0].created_at ?? undefined;
+    const latestAt = chunk[chunk.length - 1].created_at ?? undefined;
 
     const summaryId = store.insertSummary(
       conversationId,
