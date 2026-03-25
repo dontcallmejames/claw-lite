@@ -7,7 +7,7 @@ import { wrapExternalContent } from '../security/external-content.js';
  */
 export const webSearchTool: ToolDefinition = {
   name: 'web_search',
-  description: 'Search the web for information using Brave Search. Returns titles, URLs, and snippets.',
+  description: 'Search the web for information by query and return a list of relevant results with titles and URLs.\n\nUse this when: answering questions that require current information or facts not in training data; researching a topic; finding URLs to websites or pages.\nDo NOT use this when: you already have a URL and want the page content — use `web_fetch` to retrieve it directly.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -43,7 +43,8 @@ export const webSearchTool: ToolDefinition = {
           'Accept': 'application/json',
           'Accept-Encoding': 'gzip',
           'X-Subscription-Token': apiKey
-        }
+        },
+        signal: AbortSignal.timeout(15000)
       });
 
       if (!response.ok) {

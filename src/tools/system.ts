@@ -1,10 +1,8 @@
-import { exec, execFile } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
 import { loadConfig } from '../config/loader.js';
 import type { ToolDefinition } from './types.js';
-
-const execFileAsync = promisify(execFile);
 
 // Shell metacharacters that could be used for injection when the command
 // string is passed directly to the shell.
@@ -83,7 +81,7 @@ Do NOT use this when: you need to read or write files — use the \`file\` tool 
 
 Actions:
 - monitor: Get CPU, memory, disk, GPU/VRAM usage, and uptime. Pass metric="all" for everything or metric="cpu"|"memory"|"disk"|"gpu" for specific stats.
-- shell: Execute a shell command. SAFE commands (ls, dir, pwd, cat, git, echo, date, whoami, hostname) always run. BLOCKED commands (rm, del, rmdir, format, shutdown, reboot, kill, taskkill) are always denied. Other commands (including node, npm) must be in config.yml tools.shell.allowedCommands — tell Jim to add them if needed.
+- shell: Execute a shell command. SAFE commands (ls, dir, pwd, cat, git, echo, date, whoami, hostname) always run. BLOCKED commands (rm, del, rmdir, format, shutdown, reboot, kill, taskkill) are always denied. Other commands (including node, npm) must be in config.yml tools.shell.allowedCommands — tell the user to add them if needed.
 - list_processes: List running processes, optionally filtered by name
 - process_info: Get detailed info about a specific process (name or PID)
 - kill_process: Terminate a process by PID or name`,
@@ -232,7 +230,7 @@ Actions:
       if (!SAFE_COMMANDS.has(commandName) && !allowedCommands.includes(commandName)) {
         return {
           success: false,
-          error: `Command '${commandName}' is not in the safe or allowed list.\nAllowed: ${[...SAFE_COMMANDS, ...allowedCommands].join(', ')}\nAsk the owner to add it to config.yml tools.shell.allowedCommands.`
+          error: `Command '${commandName}' is not in the safe or allowed list.\nAllowed: ${[...SAFE_COMMANDS, ...allowedCommands].join(', ')}\nAsk the user to add it to config.yml tools.shell.allowedCommands.`
         };
       }
       // Reject commands containing shell metacharacters to prevent injection.

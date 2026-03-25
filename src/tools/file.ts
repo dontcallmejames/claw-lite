@@ -9,6 +9,19 @@ const PROTECTED = new Set([
   'auth.json', 'package.json', 'tsconfig.json',
 ]);
 
+const PROTECTED_READ = new Set([
+  'approved-senders.json',
+  'auth.json',
+]);
+
+/** Return true if the basename matches a read-protected pattern. */
+function isProtectedRead(filePath: string): boolean {
+  const name = basename(filePath);
+  if (PROTECTED_READ.has(name)) return true;
+  if (/pairing/i.test(name) || /approved/i.test(name)) return true;
+  return false;
+}
+
 /**
  * Resolve an input path relative to basePath, enforcing that the resolved
  * path stays within basePath. Absolute paths (Windows drive letters or UNC)
@@ -52,7 +65,7 @@ export const fileTool: ToolDefinition = {
   name: 'file',
   description: `Read, write, edit, list, delete, move, or create local files and directories on this machine.
 
-Use this when: working with files on the local filesystem (the machine running the assistant). Examples: reading source code, writing notes, editing config files, listing a directory.
+Use this when: working with files on the local filesystem. Examples: reading source code, writing notes, editing config files, listing a directory.
 Do NOT use this when: the file is in a GitHub repository — use the \`github\` tool instead.
 Do NOT use this when: you want to write a file AND commit it to git in one step — use \`write_and_commit\` instead.
 
@@ -121,9 +134,9 @@ Actions:
       } catch (e: any) {
         return { success: false, error: e.message };
       }
-      // Block reading .env even though it's not a write operation
-      if (isProtected(filePath) && basename(filePath) === '.env') {
-        return { success: false, error: 'Read blocked: .env is a protected file' };
+      // Block reading sensitive auth/config files.
+      if (isProtectedRead(filePath) || (isProtected(filePath) && basename(filePath) === '.env')) {
+        return { success: false, error: `Read blocked: ${basename(filePath)} is a protected file` };
       }
       try {
         if (!existsSync(filePath)) return { success: false, error: 'File does not exist' };

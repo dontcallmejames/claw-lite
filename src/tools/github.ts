@@ -78,7 +78,7 @@ Actions:
         description: 'The GitHub operation to perform'
       },
       owner: { type: 'string', description: 'GitHub username or org. Example: "dontcallmejames"' },
-      repo: { type: 'string', description: 'Repository name. Example: "claw-lite"' },
+      repo: { type: 'string', description: 'Repository name.' },
       path: { type: 'string', description: 'File or directory path within the repo. Example: "src/index.ts" or "" for root' },
       content: { type: 'string', description: 'File content to write (write_file action)' },
       message: { type: 'string', description: 'Commit message (write_file and delete_file actions)' },
@@ -89,12 +89,20 @@ Actions:
       auto_init: { type: 'boolean', description: 'Initialize with a README (create_repo action, default: true)' },
       query: { type: 'string', description: 'Search query (search_code action). Example: "function handleChat language:typescript"' },
       ref: { type: 'string', description: 'Branch, tag, or commit SHA (read_file and list_files actions, default: repo default branch)' },
+      confirmed: { type: 'boolean', description: 'Must be true to execute write_file, delete_file, or create_repo actions.' },
     },
     required: ['action']
   },
 
   async execute(input): Promise<ToolExecutionResult> {
     const action = input.action as string;
+    const MUTATING_ACTIONS = new Set(['write_file', 'delete_file', 'create_repo']);
+    if (MUTATING_ACTIONS.has(action) && input.confirmed !== true) {
+      return {
+        success: false,
+        error: `Action "${action}" modifies GitHub and requires explicit user confirmation. Ask the user to confirm, then call this tool again with confirmed: true.`
+      };
+    }
     try {
       if (action === 'read_file') {
         const { owner, repo, path, ref } = input;
@@ -116,7 +124,7 @@ Actions:
         if (!Array.isArray(data)) {
           return { success: false, error: 'Path is a file, not a directory' };
         }
-        const lines = data.map((f: any) => `${f.type === 'dir' ? '[dir]' : '[file]'} ${f.name}`);
+        const lines = data.map((f: any) => `${f.type === 'dir' ? '📁' : '📄'} ${f.name}`);
         return { success: true, output: lines.join('\n') };
       }
 
@@ -175,7 +183,7 @@ Actions:
           return { success: true, output: 'No results found.' };
         }
         const lines = data.items.map((item: any) =>
-          `${item.path}\n   ${item.html_url}`
+          `📄 ${item.path}\n   ${item.html_url}`
         );
         return { success: true, output: lines.join('\n\n') };
       }

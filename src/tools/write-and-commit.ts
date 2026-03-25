@@ -29,7 +29,8 @@ async function ghPut(owner: string, repo: string, filePath: string, content: str
   const token = getToken();
   if (!token) throw new Error('GITHUB_TOKEN not set');
 
-  const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${filePath}`;
+  const encodedPath = filePath.replace(/^\/+/, '').split('/').map(seg => (seg === '..' || seg === '.') ? encodeURIComponent(seg) : seg).join('/');
+  const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodedPath}`;
   const qs = branch ? `?ref=${encodeURIComponent(branch)}` : '';
 
   // Fetch existing SHA if file exists
@@ -80,9 +81,13 @@ async function ghPut(owner: string, repo: string, filePath: string, content: str
 
 /**
  * Write a file to disk AND commit it to a GitHub repo in one step.
+ *
+ * Default repo: dontcallmejames/claw-lite
+ * Default branch: main
  */
 export const writeAndCommitTool: ToolDefinition = {
   name: 'write_and_commit',
+  requiresConfirmation: true,
   description: `Write a file to the local filesystem and immediately commit it to the git repository with a commit message.
 
 Use this when: you need to create or overwrite a file AND have it committed to git in one step — for example, saving a new skill file, updating a document, or persisting a configuration change with a record.
@@ -92,7 +97,7 @@ Do NOT use this when: you just want to write a file without committing — use t
     properties: {
       path: {
         type: 'string',
-        description: 'File path within the repo, e.g. "src/index.js"'
+        description: 'File path within the repo, e.g. "src/index.js" or "entry.tp"'
       },
       content: {
         type: 'string',
@@ -108,7 +113,7 @@ Do NOT use this when: you just want to write a file without committing — use t
       },
       repo: {
         type: 'string',
-        description: 'GitHub repo name'
+        description: 'GitHub repo name (default: claw-lite)'
       },
       branch: {
         type: 'string',
@@ -128,14 +133,10 @@ Do NOT use this when: you just want to write a file without committing — use t
       content,
       message,
       owner = 'dontcallmejames',
-      repo,
+      repo = 'claw-lite',
       branch = 'main',
       local_path,
     } = input;
-
-    if (!repo) {
-      return { success: false, error: 'repo is required' };
-    }
 
     const results: string[] = [];
 
