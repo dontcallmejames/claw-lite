@@ -6,12 +6,14 @@ A lightweight, self-hosted AI assistant with multi-channel support, persistent m
 
 - **Multi-provider LLM** — OpenAI (API key or OAuth), Anthropic, Ollama (local)
 - **Channels** — Discord, Telegram, and a built-in Web UI
-- **17 tools** — 4 consolidated domain tools + 13 standalones covering files, system, memory, GitHub, web, messaging, and self-management
+- **18 tools** — 4 consolidated domain tools + 14 standalones covering files, system, memory, GitHub, web, messaging, and self-management
 - **Persistent memory** — SQLite-backed with hierarchical DAG summarization (inspired by [lossless-claw](https://github.com/Martian-Engineering/lossless-claw))
 - **Automatic context compaction** — never lose conversation history; old messages are summarized, not dropped
+- **Cron job outputs persisted** — scheduled job results are saved to SQLite and searchable via `memory_search`
 - **Full-text search** — FTS5 search across all past conversations
 - **Model failover** — automatic retry with fallback models on API errors
 - **Security hardening** — SSRF protection, 32-pattern prompt injection defenses, requiresConfirmation gate, shell allowlist, file sandbox, path traversal prevention
+- **Gateway authentication** — set `GATEWAY_SECRET` to require Bearer token auth on WebSocket connections and `/webhook`
 - **Cron scheduler** — run tasks on a schedule with channel notifications
 - **Customizable persona** — edit `SOUL.md` and `IDENTITY.md` to give your assistant any personality
 
@@ -159,8 +161,9 @@ No setup needed. Available at `http://127.0.0.1:8080` when the server is running
 | `GITHUB_TOKEN` | For GitHub tools | PAT with `repo` scope |
 | `DISCORD_BOT_TOKEN` | For Discord | Discord bot token |
 | `TELEGRAM_TOKEN` | For Telegram | Telegram bot token from @BotFather |
+| `GATEWAY_SECRET` | Optional | Bearer token required for WebSocket connections and `/webhook` POST requests. Leave unset to allow unauthenticated local access. |
 
-## Tools (17)
+## Tools (18)
 
 ### Domain Tools (consolidated, action-based)
 
@@ -171,7 +174,7 @@ No setup needed. Available at `http://127.0.0.1:8080` when the server is running
 | `memory` | `save`, `recall`, `search`, `describe`, `query`, `delete` | Persistent key-value memory + full-text search over conversation history and summaries. |
 | `github` | `read_file`, `write_file`, `delete_file`, `list_files`, `create_repo`, `search_code`, `repo_info` | GitHub API operations. All paths encoded to prevent traversal. |
 
-### Standalone Tools (13)
+### Standalone Tools (14)
 
 | Tool | Description |
 |------|-------------|
@@ -196,12 +199,14 @@ This release includes a comprehensive security pass across the tool layer:
 
 - **Prompt injection defenses** — External content (web pages, GitHub files, memory, RSS feeds) is wrapped with randomized boundary IDs and filtered through 32 injection pattern regexes before being passed to the model.
 - **requiresConfirmation gate** — 5 irreversible tools (`schedule_message`, `restart_assistant`, `update_config`, `install_dependency`, `write_skill`) require `confirmed: true` in the tool input. The registry intercepts unconfirmed calls and instructs the model to ask the user first.
-- **Shell safety** — Three-tier command policy: SAFE_COMMANDS always allowed, BLOCKED_COMMANDS always denied, everything else requires explicit listing in `config.yml`. Shell metacharacters (`& | ; < > ` $ () ! { }`) are rejected outright.
+- **Shell safety** — Three-tier command policy: SAFE_COMMANDS always allowed, BLOCKED_COMMANDS always denied, everything else requires explicit listing in `config.yml`. Shell metacharacters (`& | ; < > \` $ () ! { }`) are rejected outright.
 - **File sandbox** — All `file` tool operations resolve paths relative to `basePath` and verify the resolved path stays inside it. A protected file set (`.env`, `config.yml`, `package.json`, etc.) blocks write, edit, delete, and move operations.
 - **Cron validation** — `schedule_message` validates all 5 cron fields against their numeric ranges before writing. A write lock prevents concurrent calls from losing jobs via interleaved read-modify-write.
 - **GitHub path traversal prevention** — `encodeURIComponent` applied to owner, repo, and path-traversal-dangerous segments (`..`, `.`) in all GitHub API requests.
 - **Telegram token moved to env var** — Token is no longer stored in `config.yml`; read from `TELEGRAM_TOKEN` environment variable only.
 - **SSRF protection** — `web_fetch` validates URLs against a blocklist of private/internal address ranges before making requests.
+- **Gateway authentication** — Set `GATEWAY_SECRET` in `.env` to require `Authorization: Bearer <secret>` on all WebSocket connections and `POST /webhook` requests.
+- **Cron output persistence** — Scheduled job results are written to the SQLite memory store under the `cron` session, making them searchable via `memory_search`.
 
 ## DM Pairing
 
@@ -217,11 +222,13 @@ npm run pairing list              # show pending codes
 ```
   Web UI ──┐
   Discord ─┤── Gateway Server ─┬─ LLM Provider (failover)
-  Telegram ┘   (agentic loop)  ├─ Tool Registry (17 tools)
+  Telegram ┘   (agentic loop)  ├─ Tool Registry (18 tools)
                                └─ Memory (SQLite + DAG summaries)
 ```
 
 All conversations persist in SQLite. Old messages are summarized into a hierarchical DAG — leaf summaries from raw messages, condensed summaries from leaves. Context is assembled from recent messages + older summaries within the model's token budget.
+
+Cron job outputs are also persisted to SQLite under a dedicated `cron` session, so scheduled task results are searchable alongside regular conversation history.
 
 ## Skills
 
