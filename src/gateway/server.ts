@@ -21,6 +21,14 @@ import { getDb } from '../memory/db.js';
 import * as memStore from '../memory/store.js';
 import { assembleContext } from '../memory/assembler.js';
 import { needsCompaction, runCompaction } from '../memory/compaction.js';
+import { z } from 'zod';
+
+const memorySchema = z.object({
+  facts: z.record(z.string(), z.unknown()).optional().default({}),
+  preferences: z.record(z.string(), z.unknown()).optional().default({}),
+  notes: z.array(z.object({ id: z.string(), content: z.string(), timestamp: z.string() })).optional().default([]),
+  events: z.array(z.object({ id: z.string(), date: z.string(), description: z.string(), timestamp: z.string() })).optional().default([]),
+}).passthrough();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -72,9 +80,11 @@ function buildSystemPrompt(): string {
   // Inject live config so the assistant always knows current model/settings without a tool call
   try {
     const config = reloadConfig();
+    const fallback = config.llm.fallback?.length ? config.llm.fallback.join(', ') : 'none';
     parts.push([
       '## Current Runtime Config',
       `- Model: ${config.llm.model}`,
+      `- Fallback: ${fallback}`,
       `- Provider: ${config.llm.provider}`,
       `- Temperature: ${config.llm.temperature}`,
       `- Gateway port: ${config.gateway.port}`,
@@ -158,6 +168,8 @@ export class GatewayServer {
   private server: http.Server;
   private channelManager: ChannelManager;
   private heartbeatRunner?: HeartbeatRunner;
+  private cronjsonLock: Promise<void> = Promise.resolve();
+  private authenticatedClients = new WeakSet<WebSocket>();
 
   constructor(port?: number, host?: string) {
     const config = loadConfig();
@@ -193,7 +205,6 @@ export class GatewayServer {
     this.channelManager.register(new WebSocketChannel(() => this.activeConnections));
     setChannelManager(this.channelManager);
 
-    // Telegram token is read from TELEGRAM_TOKEN env var — not hardcoded in config
     const telegramToken = process.env.TELEGRAM_TOKEN || config.telegram?.token;
     if (telegramToken) {
       const allowedChatIds = config.telegram?.allowed_chat_ids ?? [];
@@ -300,8 +311,42 @@ export class GatewayServer {
       return;
     }
 
+    // Proxy /kaylee/* → ZeroClaw on Kaylee's Pi
+    if (req.url?.startsWith('/kaylee/')) {
+      this.proxyTo(req, res, req.url.slice('/kaylee'.length), 'http://192.168.1.10:3000', 'Kaylee unavailable');
+      return;
+    }
+
+    // Proxy /deckard/* → OpenClaw on the Pi (avoids CORS from browser)
+    if (req.url?.startsWith('/deckard/')) {
+      this.proxyTo(req, res, req.url.slice('/deckard'.length), 'http://192.168.1.191:18789', 'Deckard unavailable');
+      return;
+    }
+
+    // Serve AI Launchpad hub for GET /hub
+    if (req.method === 'GET' && req.url === '/hub') {
+      const hubPath = path.join(__dirname, '..', '..', '..', 'AI Launchpad', 'ai-launchpad.html');
+      if (fs.existsSync(hubPath)) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(fs.readFileSync(hubPath));
+      } else {
+        res.writeHead(404);
+        res.end('Hub not found');
+      }
+      return;
+    }
+
     // POST /webhook
     if (req.method === 'POST' && req.url === '/webhook') {
+      const gatewaySecret = process.env.GATEWAY_SECRET;
+      if (gatewaySecret) {
+        const authHeader = req.headers['authorization'];
+        if (!authHeader || authHeader !== `Bearer ${gatewaySecret}`) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
+      }
       let body = '';
       let size = 0;
       req.on('error', () => {
@@ -342,11 +387,26 @@ export class GatewayServer {
   }
 
   private setupEventHandlers(): void {
-    this.wss.on('connection', (ws: WebSocket) => {
+    this.wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
+      const gatewaySecret = process.env.GATEWAY_SECRET;
+      if (gatewaySecret) {
+        const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+        const tokenParam = url.searchParams.get('token');
+        const authHeader = req.headers['authorization'];
+        const provided = tokenParam ?? (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null);
+        if (provided !== gatewaySecret) {
+          ws.close(4401, 'Unauthorized');
+          return;
+        }
+      }
       console.log('New client connected');
       this.activeConnections.add(ws);
 
       ws.on('message', async (data: Buffer) => {
+        if (data.length > 1_000_000) {
+          this.sendError(ws, 'Message too large');
+          return;
+        }
         await this.handleMessage(ws, data);
       });
 
@@ -429,53 +489,8 @@ export class GatewayServer {
   }
 
   /**
-   * Returns true for messages that are pure conversation - no tools needed.
-   */
-  private isConversational(messages: any[]): boolean {
-    const lastUser = [...messages].reverse().find((m: any) => m.role === 'user');
-    if (!lastUser) return false;
-    const text = lastUser.content.trim().toLowerCase();
-
-    const alwaysNeedTools = [
-      /briefing/, /weather/, /headline/, /\bnews\b/,
-      /\bsearch\b/, /read.*file/, /show.*file/,
-      /what.*(config|temperature|temp\b)/, /what.*memory/,
-      /list.*file/, /check.*(system|cpu|disk|ram)/,
-      /\bexecute\b/, /switch.*model/, /\bfetch\b/, /look up/,
-      /what('s| is) (going on|happening|today)/,
-    ];
-    if (alwaysNeedTools.some(p => p.test(text))) return false;
-
-    const conversational = [
-      /^(hi|hello|hey|yo|sup|howdy)[\s!?.]?$/,
-      /^(thanks|thank you|thx|ty)[\s!?.]?$/,
-      /^(ok|okay|got it|sure|yes|no|yeah|nope|cool|great|nice|awesome)[\s!?.]?$/,
-      /^who are you\??$/,
-      /^what('s| is) your name\??$/,
-      /^what are you\??$/,
-      /^how are you\??$/,
-      /^what can you do\??$/,
-      /^tell me about yourself\.?$/,
-      /^introduce yourself\.?$/,
-      /what models? (do you|can you|are available|do you have)/,
-      /which models?.*available/,
-      /what (llm|ai) models?/,
-      /what are your (tools|capabilities|skills)/,
-      /what model (are you|do you)/,
-      /which model (are you|do you)/,
-      /what.*model.*using/,
-      /what.*model.*running/,
-      /what (build|version) (are you|do you)/,
-      /are you using/,
-      /are you running/,
-      /what provider/,
-    ];
-
-    return conversational.some(p => p.test(text));
-  }
-
-  /**
    * Return all tools minus any on the deny list.
+   * Capable models (Claude Sonnet+) handle the full tool set without keyword filtering.
    */
   private getAllowedTools() {
     const config = reloadConfig();
@@ -487,6 +502,8 @@ export class GatewayServer {
 
   /**
    * Check whether a model response is fabricating a completed action.
+   * If the model claims to have written/committed/uploaded/created something
+   * but no mutating tool was called this session, it's lying.
    */
   private verifyResponse(
     content: string,
@@ -496,6 +513,7 @@ export class GatewayServer {
 
     const lower = content.toLowerCase();
 
+    // Phrases that indicate the model is claiming it completed a write/commit/upload
     const claimPatterns = [
       /i(?:'ve| have) (?:added|created|written|updated|committed|pushed|uploaded|saved|made the changes)/,
       /(?:the file|the changes|the update|the commit|the readme|the plugin) (?:has been|have been|is now|are now) (?:added|created|written|updated|committed|pushed|uploaded|saved)/,
@@ -507,6 +525,7 @@ export class GatewayServer {
     const isClaiming = claimPatterns.some(p => p.test(lower));
     if (!isClaiming) return { ok: true };
 
+    // Mutating tools — if any of these fired, the claim is legitimate
     const mutatingTools = [
       'write_and_commit', 'github_write_file', 'github_delete_file',
       'github_create_repo', 'write_file', 'edit_file', 'execute_shell',
@@ -524,39 +543,47 @@ export class GatewayServer {
   }
 
   private async handleChat(ws: WebSocket, request: ChatRequest): Promise<void> {
+    // Build system prompt server-side from identity files + memory
     const systemPrompt = buildSystemPrompt();
     const { model } = reloadConfig().llm;
 
+    // Get or create a conversation in SQLite (use 'webchat' as session ID)
     const conversationId = memStore.getOrCreateConversation('webchat');
 
+    // Persist new user messages that aren't already in the DB
     const userMessages = request.messages.filter((m: any) => m.role !== 'system');
     const lastUserMsg = [...userMessages].reverse().find((m: any) => m.role === 'user');
     if (lastUserMsg?.content) {
       memStore.insertMessage(conversationId, 'user', lastUserMsg.content);
     }
 
+    // Assemble context from SQLite (summaries + recent messages)
     const assembled = assembleContext(conversationId, systemPrompt, model);
     let baseMessages = assembled.messages;
 
+    // Context window guard — trim if still approaching model limit
     const guard = guardContext(baseMessages, model);
     baseMessages = guard.messages;
     if (guard.trimmed) {
       console.log(`[Gateway] Context trimmed: ~${guard.estimatedTokens}/${guard.contextLimit} tokens`);
     }
 
+    // Check for direct tool intent - bypass LLM for known commands
     const directIntent = this.detectDirectToolIntent(request.messages);
     if (directIntent) {
       console.log(`[Gateway] Direct tool intent: ${directIntent.tool}`);
       try {
         const result = await this.toolRegistry.executeTool(directIntent.tool, directIntent.input, {});
         if (result.success) {
+          // Get the original user message for context
           const lastUser = [...request.messages].reverse().find((m: any) => m.role === 'user');
           const userMsg = lastUser?.content || 'the request';
+          // Ask LLM to present the result naturally - no tools in this step
           const presentMessages: { role: 'system' | 'user' | 'assistant' | 'tool'; content: string }[] = [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: `The user asked: "${userMsg}"\n\nHere is the data retrieved:\n\n${result.output}\n\nRespond naturally and concisely based on this data.` }
           ];
-          const response = await chatWithFailover(this.llmProvider, presentMessages, undefined);
+          const response = await chatWithFailover(this.llmProvider,presentMessages, undefined);
           this.sendMessage(ws, { type: 'chat', payload: { content: response.content || result.output } });
         } else {
           this.sendMessage(ws, { type: 'chat', payload: { content: `Couldn't complete that: ${result.error}` } });
@@ -567,13 +594,9 @@ export class GatewayServer {
       return;
     }
 
-    const conversational = this.isConversational(request.messages);
-    const tools = conversational ? undefined : this.getAllowedTools();
+    const tools = this.getAllowedTools();
 
-    if (conversational) {
-      console.log('[Gateway] Conversational - no tools');
-    }
-
+    // Agentic loop
     const conversationMessages: Message[] = [...baseMessages];
     let maxTurns = 5;
     let turn = 0;
@@ -585,13 +608,14 @@ export class GatewayServer {
       turn++;
       console.log(`[Gateway] Turn ${turn}`);
 
-      const response = await chatWithFailover(this.llmProvider, conversationMessages, tools);
+      const response = await chatWithFailover(this.llmProvider,conversationMessages, tools);
 
       if (response.content) lastContent = response.content;
 
       if (response.toolUses && response.toolUses.length > 0) {
         console.log(`[Gateway] Tool calls: ${response.toolUses.map(t => t.name).join(', ')}`);
 
+        // Break on repeated identical calls
         const sig = response.toolUses.map(t => `${t.name}:${JSON.stringify(t.input)}`).join('|');
         if (seenToolSignatures.includes(sig)) {
           console.log('[Gateway] Repeated tool call - breaking loop');
@@ -599,12 +623,14 @@ export class GatewayServer {
         }
         seenToolSignatures.push(sig);
 
+        // Add assistant message with tool_calls so Ollama can correlate the results
         conversationMessages.push({
           role: 'assistant',
           content: response.content || '',
           tool_calls: response.toolUses,
         });
 
+        // Execute tools and add results with tool_call_id to close the loop
         for (const toolUse of response.toolUses) {
           console.log(`[Gateway] Executing: ${toolUse.name}`, toolUse.input);
           const result = await this.toolRegistry.executeTool(toolUse.name, toolUse.input, {});
@@ -622,9 +648,11 @@ export class GatewayServer {
         continue;
       }
 
+      // Clean response - but verify it isn't a fabricated success claim
       const verified = this.verifyResponse(response.content || '', seenToolSignatures);
       if (!verified.ok) {
         console.warn(`[Gateway] Fabricated claim detected: "${verified.reason}" — forcing tool use`);
+        // Push the fabrication back as a firm correction and loop again
         conversationMessages.push({ role: 'assistant', content: response.content || '' });
         conversationMessages.push({
           role: 'user',
@@ -635,10 +663,12 @@ export class GatewayServer {
 
       console.log(`[Gateway] Done after ${turn} turn(s)`);
 
+      // Persist assistant response to SQLite
       if (response.content) {
         memStore.insertMessage(conversationId, 'assistant', response.content);
       }
 
+      // Run compaction if needed
       if (needsCompaction(conversationId)) {
         runCompaction(conversationId, this.llmProvider).catch(err =>
           console.error('[Compaction] Background error:', err)
@@ -652,19 +682,22 @@ export class GatewayServer {
       return;
     }
 
+    // Loop ended without a clean text response.
+    // If we have lastContent use it. If not, ask the model to summarize the last tool result.
     console.warn(`[Gateway] Loop ended after ${turn} turns`);
     if (lastContent) {
       this.sendMessage(ws, { type: 'chat', payload: { content: lastContent, stopReason: 'max_turns' } });
       return;
     }
     if (lastToolResult) {
+      // Ask model to synthesize the raw tool result into a natural response
       try {
         const lastUser = [...request.messages].reverse().find((m: any) => m.role === 'user');
         const synthesizeMessages: { role: 'system' | 'user' | 'assistant' | 'tool'; content: string }[] = [
           { role: 'system', content: buildSystemPrompt() },
           { role: 'user', content: `The user asked: "${lastUser?.content || ''}"\n\nHere is the result:\n\n${lastToolResult}\n\nRespond naturally and concisely.` }
         ];
-        const synth = await chatWithFailover(this.llmProvider, synthesizeMessages, undefined);
+        const synth = await chatWithFailover(this.llmProvider,synthesizeMessages, undefined);
         this.sendMessage(ws, { type: 'chat', payload: { content: synth.content || lastToolResult, stopReason: 'max_turns' } });
       } catch {
         this.sendMessage(ws, { type: 'chat', payload: { content: lastToolResult, stopReason: 'max_turns' } });
@@ -674,6 +707,10 @@ export class GatewayServer {
     this.sendMessage(ws, { type: 'chat', payload: { content: "I got stuck on that one. Try rephrasing.", stopReason: 'max_turns' } });
   }
 
+  /**
+   * Run a single message through the agentic loop and return the response string.
+   * Used by the cron runner to execute scheduled jobs without a WebSocket.
+   */
   public async runCronJob(message: string): Promise<string> {
     return this.enqueue(() => this.runCronJobImpl(message));
   }
@@ -694,7 +731,7 @@ export class GatewayServer {
 
     while (turn < maxTurns) {
       turn++;
-      const response = await chatWithFailover(this.llmProvider, conversationMessages, tools);
+      const response = await chatWithFailover(this.llmProvider,conversationMessages, tools);
       if (response.content) lastContent = response.content;
 
       if (response.toolUses && response.toolUses.length > 0) {
@@ -720,10 +757,11 @@ export class GatewayServer {
       return response.content || lastContent || lastToolResult || 'Done.';
     }
 
+    // Loop ended — synthesize from last tool result if available
     if (lastContent) return lastContent;
     if (lastToolResult) {
       try {
-        const synth = await chatWithFailover(this.llmProvider, [
+        const synth = await chatWithFailover(this.llmProvider,[
           { role: 'system', content: buildSystemPrompt() },
           { role: 'user', content: `Summarize this result concisely:\n\n${lastToolResult}` },
         ], undefined);
@@ -770,6 +808,7 @@ export class GatewayServer {
     try {
       const configPath = path.join(__dirname, '..', '..', 'config.yml');
       const existing = fs.readFileSync(configPath, 'utf-8');
+      // Patch only known safe fields
       let updated = existing;
       if (payload.model !== undefined) {
         updated = updated.replace(/^(\s*model:\s*).*$/m, `$1${payload.model}`);
@@ -798,9 +837,14 @@ export class GatewayServer {
   }
 
   private async handleSaveMemory(ws: WebSocket, payload: any): Promise<void> {
+    const parsed = memorySchema.safeParse(payload);
+    if (!parsed.success) {
+      this.sendMessage(ws, { type: 'save_memory', payload: { success: false, error: 'Invalid memory shape' } });
+      return;
+    }
     try {
       const memPath = path.join(__dirname, '..', '..', 'memory.json');
-      fs.writeFileSync(memPath, JSON.stringify(payload, null, 2), 'utf-8');
+      fs.writeFileSync(memPath, JSON.stringify(parsed.data, null, 2), 'utf-8');
       this.sendMessage(ws, { type: 'save_memory', payload: { success: true } });
     } catch (err: any) {
       this.sendMessage(ws, { type: 'save_memory', payload: { success: false, error: err.message } });
@@ -821,13 +865,16 @@ export class GatewayServer {
   }
 
   private async handleSaveCrons(ws: WebSocket, payload: any): Promise<void> {
-    try {
-      const cronsPath = path.join(__dirname, '..', '..', 'crons.json');
-      fs.writeFileSync(cronsPath, JSON.stringify(payload, null, 2), 'utf-8');
-      this.sendMessage(ws, { type: 'save_crons', payload: { success: true } });
-    } catch (err: any) {
-      this.sendMessage(ws, { type: 'save_crons', payload: { success: false, error: err.message } });
-    }
+    this.cronjsonLock = this.cronjsonLock.then(async () => {
+      try {
+        const cronsPath = path.join(__dirname, '..', '..', 'crons.json');
+        fs.writeFileSync(cronsPath, JSON.stringify(payload, null, 2), 'utf-8');
+        this.sendMessage(ws, { type: 'save_crons', payload: { success: true } });
+      } catch (err: any) {
+        this.sendMessage(ws, { type: 'save_crons', payload: { success: false, error: err.message } });
+      }
+    });
+    await this.cronjsonLock;
   }
 
   private sendMessage(ws: WebSocket, message: GatewayMessage): void {
